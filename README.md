@@ -10,7 +10,7 @@
 go build .
 ```
 
-В релизах можно скачать готовую версию под все целевые платформы: Windows, Linux, Darwin.
+В релизах можно скачать готовую версию под все целевые платформы: Windows, Linux, Darwin и Android (для запуска через Termux).
 
 Для начала установите расширение `Get cookies.txt LOCALLY` для [Chrome](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc) или [Firefox](https://addons.mozilla.org/en-US/firefox/addon/get-cookies-txt-locally/), а затем экспортируйте cookies с `hh.ru` в `cookies.txt` (приложение по умолчанию его ищет в текущем каталоге).
 
