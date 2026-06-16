@@ -10,7 +10,7 @@
 go build .
 ```
 
-В [релизах](/s3rgeym/hh-ai-applier/releases) можно скачать готовую версию под все целевые платформы: Windows, Linux, Darwin (Mac) и Android (для запуска через Termux).
+В [релизах](https://github.com/s3rgeym/hh-ai-applier/releases/latest) можно скачать готовую версию под все целевые платформы: Windows, Linux, Darwin (Mac) и Android (для запуска через Termux).
 
 Для начала установите расширение `Get cookies.txt LOCALLY` для [Chrome](https://chromewebstore.google.com/detail/get-cookiestxt-locally/cclelndahbckbenkjhflpdbgdldlbecc) или [Firefox](https://addons.mozilla.org/en-US/firefox/addon/get-cookies-txt-locally/), а затем экспортируйте cookies с `hh.ru` в `cookies.txt` (приложение по умолчанию его ищет в текущем каталоге, если путь до него не задан).
 
@@ -25,6 +25,8 @@ go build .
 Из данной ссылки берется тот же базовый домен сайта, чтобы не было лишних редиректов. Выбор различных фильтров в интерфейсе, приводит к изменению параметров **Query String** ссылки, а поэтому они будут применяться и при работе через программу, что избавляет от передачи их через флаги — просто скопируй и вставь ссылку.
 
 Используйте флаг `-h` для справки.
+
+По умолчанию приложение пытается использовать модель `llama3.1:8b`, запущенную на `http://localhost:11434` (это можно сделать через **Ollama**).
 
 ## Переменные окружения
 
