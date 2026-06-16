@@ -721,8 +721,9 @@ func (a *HHAutoApplier) SendResponse(payload url.Values, refererURL string) (map
 		return nil, err
 	}
 	defer resp.Body.Close()
-
 	status := resp.StatusCode
+	logger.Debug("%d %s %s", status, resp.Request.Method, resp.Request.URL.String())
+
 	if (status < 200 || status >= 300) && (status < 400 || status >= 500) {
 		return nil, unexpectedHTTPStatus(status)
 	}
@@ -736,6 +737,14 @@ func (a *HHAutoApplier) SendResponse(payload url.Values, refererURL string) (map
 		if err := json.Unmarshal(body, &result); err != nil {
 			return nil, fmt.Errorf("failed to decode JSON response: %w", err)
 		}
+
+		// timestamp := time.Now().Format("20060102_150405")
+		// fileName := fmt.Sprintf("%s.json", timestamp)
+		//
+		// filePath := filepath.Join(os.TempDir(), fileName)
+		//
+		// os.WriteFile(filePath, body, 0644)
+		// logger.Debug("Ответ сохранен в %s", filePath)
 	}
 	return result, nil
 }
@@ -943,7 +952,7 @@ func (a *HHAutoApplier) ApplyVacancies() error {
 
 		if errValue, ok := responseResult["error"].(string); ok && errValue != "" {
 			if errValue == "negotiations-limit-exceeded" {
-				logger.Info("Суточный лимит откликов исчерпан")
+				logger.Warn("Суточный лимит откликов исчерпан")
 				return nil
 			}
 
@@ -951,14 +960,14 @@ func (a *HHAutoApplier) ApplyVacancies() error {
 			continue
 		}
 
-		logger.Info("Отклик отправлен: %s - %s", vacancyURL, vacancy.Name)
-		// if success, _ := responseResult["success"].(bool); success {
-		// 	logger.Info("Отклик отправлен: %s - %s", vacancyURL, vacancy.Name)
-		// 	fmt.Println(vacancyURL)
-		// 	continue
-		// }
-		//
-		// logger.Error("Неизвестная ошибка при отклике на вакансию: %s (%s)", vacancyURL, vacancy.Name)
+		// logger.Info("Отклик отправлен: %s - %s", vacancyURL, vacancy.Name)
+		if success, _ := responseResult["success"].(string); success == "true" {
+			logger.Info("Отклик отправлен: %s - %s", vacancyURL, vacancy.Name)
+			fmt.Println(vacancyURL)
+			continue
+		}
+
+		logger.Error("Неизвестная ошибка при отклике на вакансию: %s (%s)", vacancyURL, vacancy.Name)
 	}
 
 	if appCtx.Err() != nil {
