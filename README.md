@@ -16,6 +16,8 @@ go build .
 
 Для запуска приложения укажите ссылку для поиска по вакансиям со всеми нужными фильтрами:
 
+<img width="834" height="600" alt="Unsaved Image 1" src="https://github.com/user-attachments/assets/9a23879b-44a6-446f-b6d3-f496d57bc234" />
+
 ```sh
 ./hh-ai-applier -u "https://hh.ru/search/vacancy?text=go&..."
 ```
