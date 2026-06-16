@@ -51,6 +51,14 @@ cp example.env .env
 | `HH_AI_MODEL` | Модель AI. |
 | `HH_AI_API_KEY` | API key для OpenAI-compatible API. |
 
+Например, для Chat-GPT нужно указать сл:
+
+```env
+HH_AI_BASE_URL="https://api.openai.com"
+HH_AI_MODEL="gpt-4o-mini"
+HH_AI_API_KEY="ваш_api_ключ_от_openai"
+```
+
 ## Docker
 
 Требует наличия `docker` и `docker-compose`, а так же файла `.env` (см. пред. пункт).
