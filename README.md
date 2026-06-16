@@ -44,12 +44,12 @@ cp example.env .env
 
 Поддерживаемые переменные приложения:
 
-| Переменная | Назначение |
-| --- | --- |
-| `HH_SEARCH_URL` | URL поисковой выдачи HH с нужными фильтрами. |
-| `HH_AI_BASE_URL` | Базовый URL OpenAI-compatible API. |
-| `HH_AI_MODEL` | Модель AI. |
-| `HH_AI_API_KEY` | API key для OpenAI-compatible API. |
+| Переменная | Флаг | Назначение |
+| --- | --- | --- |
+| `HH_SEARCH_URL` | `-u` | URL поисковой выдачи HH с нужными фильтрами. |
+| `HH_AI_BASE_URL` | `-ai-base-url` | Базовый URL OpenAI-compatible API. |
+| `HH_AI_MODEL` | `-ai-model` | Модель AI. |
+| `HH_AI_API_KEY` | `-ai-api-key` | API key для OpenAI-compatible API. |
 
 Например, для Chat-GPT нужно указать сл:
 
