@@ -20,7 +20,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-    "time"
+	"time"
 )
 
 const (
@@ -150,11 +150,11 @@ type TestFormAnswer struct {
 }
 
 type ApplyResult struct {
-    URL       string    `json:"url"`
-    Name      string    `json:"name"`
-    Letter    string    `json:"letter"`
-    AppliedAt time.Time `json:"applied_at"`
-    ResponsesCount int  `json:"responses_count"`
+	URL            string    `json:"url"`
+	Name           string    `json:"name"`
+	Letter         string    `json:"letter"`
+	AppliedAt      time.Time `json:"applied_at"`
+	ResponsesCount int       `json:"responses_count"`
 }
 
 type HHResponse struct {
@@ -243,32 +243,32 @@ type ResumeItem struct {
 }
 
 type Logger struct {
-    base  *log.Logger
-    level LogLevel
-    color bool
+	base  *log.Logger
+	level LogLevel
+	color bool
 }
 
 func NewLogger(output io.Writer, level LogLevel) *Logger {
-    useColor := false
-    if f, ok := output.(*os.File); ok {
-        if fi, err := f.Stat(); err == nil {
-            useColor = (fi.Mode() & os.ModeCharDevice) != 0
-        }
-    }
-    return &Logger{
-        base:  log.New(output, "", log.LstdFlags),
-        level: level,
-        color: useColor,
-    }
+	useColor := false
+	if f, ok := output.(*os.File); ok {
+		if fi, err := f.Stat(); err == nil {
+			useColor = (fi.Mode() & os.ModeCharDevice) != 0
+		}
+	}
+	return &Logger{
+		base:  log.New(output, "", log.LstdFlags),
+		level: level,
+		color: useColor,
+	}
 }
 
 func (l *Logger) write(level, color, format string, args ...any) {
-    msg := fmt.Sprintf(format, args...)
-    if l.color {
-        l.base.Printf("%s[%s]\x1b[0m %s", color, level, msg)
-        return
-    }
-    l.base.Printf("[%s] %s", level, msg)
+	msg := fmt.Sprintf(format, args...)
+	if l.color {
+		l.base.Printf("%s[%s]\x1b[0m %s", color, level, msg)
+		return
+	}
+	l.base.Printf("[%s] %s", level, msg)
 }
 
 func (l *Logger) Debug(format string, args ...any) {
@@ -563,7 +563,7 @@ func (c *AIClient) GenerateLetter(v Vacancy, resumeTitle, fullName, extraPrompt 
 	if err := c.ctx.Err(); err != nil {
 		return "", err
 	}
-    systemPrompt := "Сгенерируй сопроводительное письмо от моего имени без использования markdown, списков и ссылок, не длиннее 2048 символов. Опиши, почему указанная вакансия подходит для моего резюме."
+	systemPrompt := "Сгенерируй сопроводительное письмо от моего имени без использования markdown, списков и ссылок, не длиннее 2048 символов. Опиши, почему указанная вакансия подходит для моего резюме."
 
 	userPrompt := fmt.Sprintf(
 		"Название вакансии для отклика: %s\nКомпания, опубликовавшая вакансию: %s\nНазвание моего резюме: %s\nМое полное имя: %s\n",
@@ -635,7 +635,7 @@ func (c *AIClient) AnswerTest(tasks []Task, extraPrompt string) (map[int]TestFor
 
 	var parsed TestAnswersResponse
 	if err := parseJSONAnswer(answer, &parsed); err != nil {
-		logger.Error("AI returned invalid test JSON: %.2000s", strings.TrimSpace(answer))
+		logger.Warn("AI returned invalid test JSON: %.2000s", strings.TrimSpace(answer))
 		return nil, err
 	}
 	results := make(map[int]TestFormAnswer, len(parsed.Answers))
@@ -963,8 +963,8 @@ func (a *HHAutoApplier) ApplyVacancies() error {
 		defer f.Close()
 		out = f
 	}
-    encoder := json.NewEncoder(out)
-    var mu sync.Mutex
+	encoder := json.NewEncoder(out)
+	var mu sync.Mutex
 
 	var wg sync.WaitGroup
 	for i := 0; i < a.workers; i++ {
@@ -1008,19 +1008,24 @@ func (a *HHAutoApplier) ApplyVacancies() error {
 					continue
 				}
 
-                if success, _ := responseResult["success"].(string); success == "true" {
-                    mu.Lock()
-                    newCount := vacancy.TotalResponsesCount + 1
-                    logger.Info("Application successfully sent (responses: %d): %s", newCount, vacancyURL)
-                    _ = encoder.Encode(ApplyResult{
-                        URL:            vacancyURL,
-                        Name:           vacancy.Name,
-                        Letter:         letter,
-                        AppliedAt:      time.Now(),
-                        ResponsesCount: newCount,
-                    })
-                    mu.Unlock()
-                }
+				successVal, ok := responseResult["success"]
+				successStr, isString := successVal.(string)
+
+				if ok && isString && successStr == "true" {
+					mu.Lock()
+					newCount := vacancy.TotalResponsesCount + 1
+					logger.Info("Application successfully sent (responses: %d): %s", newCount, vacancyURL)
+					_ = encoder.Encode(ApplyResult{
+						URL:            vacancyURL,
+						Name:           vacancy.Name,
+						Letter:         letter,
+						AppliedAt:      time.Now(),
+						ResponsesCount: newCount,
+					})
+					mu.Unlock()
+				} else if !ok {
+					logger.Warn("Unexpected response for %s: 'success' field not found. Response: %v", vacancyURL, responseResult)
+				}
 			}
 		}()
 	}
