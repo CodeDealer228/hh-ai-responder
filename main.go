@@ -150,10 +150,11 @@ type TestFormAnswer struct {
 }
 
 type ApplyResult struct {
-	URL       string    `json:"url"`
-	Name      string    `json:"name"`
-	Letter    string    `json:"letter"`
-	AppliedAt time.Time `json:"applied_at"`
+    URL       string    `json:"url"`
+    Name      string    `json:"name"`
+    Letter    string    `json:"letter"`
+    AppliedAt time.Time `json:"applied_at"`
+    ResponsesCount int  `json:"responses_count"`
 }
 
 type HHResponse struct {
@@ -962,8 +963,8 @@ func (a *HHAutoApplier) ApplyVacancies() error {
 		defer f.Close()
 		out = f
 	}
-	encoder := json.NewEncoder(out)
-	var mu sync.Mutex
+    encoder := json.NewEncoder(out)
+    var mu sync.Mutex
 
 	var wg sync.WaitGroup
 	for i := 0; i < a.workers; i++ {
@@ -1007,17 +1008,19 @@ func (a *HHAutoApplier) ApplyVacancies() error {
 					continue
 				}
 
-				if success, _ := responseResult["success"].(string); success == "true" {
-					logger.Info("Application successfully sent: %s", vacancyURL)
-					mu.Lock()
-					_ = encoder.Encode(ApplyResult{
-						URL:       vacancyURL,
-						Name:      vacancy.Name,
-						Letter:    letter,
-						AppliedAt: time.Now(),
-					})
-					mu.Unlock()
-				}
+                if success, _ := responseResult["success"].(string); success == "true" {
+                    mu.Lock()
+                    newCount := vacancy.TotalResponsesCount + 1
+                    logger.Info("Application successfully sent (responses: %d): %s", newCount, vacancyURL)
+                    _ = encoder.Encode(ApplyResult{
+                        URL:            vacancyURL,
+                        Name:           vacancy.Name,
+                        Letter:         letter,
+                        AppliedAt:      time.Now(),
+                        ResponsesCount: newCount,
+                    })
+                    mu.Unlock()
+                }
 			}
 		}()
 	}
