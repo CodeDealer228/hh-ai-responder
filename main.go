@@ -155,6 +155,41 @@ type ApplyResult struct {
 	Letter         string    `json:"letter"`
 	AppliedAt      time.Time `json:"applied_at"`
 	ResponsesCount int       `json:"responses_count"`
+	TestAnswers    []QAPair  `json:"test_answers,omitempty"`
+}
+
+type QAPair struct {
+	Question string `json:"question"`
+	Answer   string `json:"answer"`
+}
+
+// buildReadableTestAnswers converts test tasks and AI answers to human-readable question/answer pairs
+func buildReadableTestAnswers(tasks []Task, answers map[int]TestFormAnswer) []QAPair {
+	var result []QAPair
+	for _, task := range tasks {
+		ans, ok := answers[task.ID]
+		if !ok {
+			continue
+		}
+
+		var answerText string
+		if ans.HasChoice {
+			for _, sol := range task.CandidateSolutions {
+				if id, err := strconv.Atoi(sol.ID); err == nil && id == ans.SolutionID {
+					answerText = sol.Text
+					break
+				}
+			}
+		} else {
+			answerText = ans.TextAnswer
+		}
+
+		result = append(result, QAPair{
+			Question: task.Description,
+			Answer:   answerText,
+		})
+	}
+	return result
 }
 
 type HHResponse struct {
@@ -811,26 +846,30 @@ func (a *HHAutoApplier) ApplyVacancy(vacancyID int, refererURL, letter string) (
 	return a.SendResponse(payload, refererURL)
 }
 
-func (a *HHAutoApplier) ApplyVacancyWithTest(vacancyID int, letter string) (map[string]any, error) {
+func (a *HHAutoApplier) ApplyVacancyWithTest(vacancyID int, letter string) (map[string]any, []QAPair, error) {
 	if err := a.ctx.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	token := a.XSRFToken()
 	if token == "" {
-		return nil, errors.New("xsrf token not found")
+		return nil, nil, errors.New("xsrf token not found")
 	}
 
 	responseURL := a.ResolveURL(fmt.Sprintf("/applicant/vacancy_response?vacancyId=%d&startedWithQuestion=false&hhtmFrom=vacancy", vacancyID))
 	tests, err := a.GetVacancyTests(responseURL)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	logger.Debug("Vacancy tests: %v", tests)
 
 	test, ok := tests[strconv.Itoa(vacancyID)]
 	if !ok {
-		return nil, fmt.Errorf("vacancy test data not found for vacancy %d", vacancyID)
+		return nil, nil, fmt.Errorf("vacancy marked with test but no test data found for vacancy %d", vacancyID)
+	}
+
+	if len(test.Tasks) == 0 {
+		return nil, nil, fmt.Errorf("vacancy marked with test but no tasks returned for vacancy %d", vacancyID)
 	}
 
 	payload := url.Values{
@@ -852,10 +891,14 @@ func (a *HHAutoApplier) ApplyVacancyWithTest(vacancyID int, letter string) (map[
 
 	answers, err := a.ai.AnswerTest(test.Tasks, a.extraTestPrompt)
 	if err != nil {
-		return nil, fmt.Errorf("ai failed to answer test: %w", err)
+		return nil, nil, fmt.Errorf("ai failed to answer test: %w", err)
+	}
+
+	if len(answers) != len(test.Tasks) {
+		return nil, nil, fmt.Errorf("incomplete test answers: got %d, expected %d", len(answers), len(test.Tasks))
 	}
 	if err := a.ctx.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	logger.Debug("AI answers: %v", answers)
@@ -866,7 +909,7 @@ func (a *HHAutoApplier) ApplyVacancyWithTest(vacancyID int, letter string) (map[
 
 		answer, ok := answers[taskID]
 		if !ok {
-			return nil, fmt.Errorf("ai returned no answer for task %d", taskID)
+			return nil, nil, fmt.Errorf("ai returned no answer for task %d", taskID)
 		}
 		if answer.HasChoice {
 			payload.Set(fieldName, strconv.Itoa(answer.SolutionID))
@@ -876,7 +919,13 @@ func (a *HHAutoApplier) ApplyVacancyWithTest(vacancyID int, letter string) (map[
 		payload.Set(fieldName+"_text", answer.TextAnswer)
 	}
 
-	return a.SendResponse(payload, responseURL)
+	respJSON, err := a.SendResponse(payload, responseURL)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	qaPairs := buildReadableTestAnswers(test.Tasks, answers)
+	return respJSON, qaPairs, nil
 }
 
 func (a *HHAutoApplier) fetchVacancyPage(page int) ([]Vacancy, error) {
@@ -987,6 +1036,10 @@ func (a *HHAutoApplier) ApplyVacancies() error {
 					logger.Error("AI failed to generate letter for %s: %v", vacancyURL, err)
 					continue
 				}
+				if strings.TrimSpace(letter) == "" {
+					logger.Error("Generated letter is empty, skipping application: %s", vacancyURL)
+					continue
+				}
 
 				if a.dryRun {
 					logger.Debug("Application skipped (dry-run): %s", vacancyURL)
@@ -994,8 +1047,9 @@ func (a *HHAutoApplier) ApplyVacancies() error {
 				}
 
 				var responseResult map[string]any
+				var qaPairs []QAPair
 				if vacancy.UserTestPresent {
-					responseResult, err = a.ApplyVacancyWithTest(vacancy.ID, letter)
+					responseResult, qaPairs, err = a.ApplyVacancyWithTest(vacancy.ID, letter)
 				} else {
 					responseResult, err = a.ApplyVacancy(vacancy.ID, vacancyURL, letter)
 				}
@@ -1021,6 +1075,7 @@ func (a *HHAutoApplier) ApplyVacancies() error {
 						Letter:         letter,
 						AppliedAt:      time.Now(),
 						ResponsesCount: newCount,
+						TestAnswers:    qaPairs,
 					})
 					mu.Unlock()
 				} else if !ok {
