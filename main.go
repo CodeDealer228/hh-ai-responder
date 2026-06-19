@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"os"
@@ -70,6 +71,7 @@ type Config struct {
 	RequestInterval   time.Duration
 	Workers           int
 	OutputPath        string
+	Contacts          string
 }
 
 type Vacancy struct {
@@ -217,6 +219,7 @@ type HHAutoApplier struct {
 	ai                *AIClient
 	extraLetterPrompt string
 	extraTestPrompt   string
+	contacts          string
 	workers           int
 	outputPath        string
 
@@ -362,6 +365,7 @@ func NewHHAutoApplier(ctx context.Context, cfg Config) (*HHAutoApplier, error) {
 		ai:                NewAIClient(ctx, cfg.AIBaseURL, cfg.AIModel, cfg.AIAPIKey, cfg.AITimeout, cfg.AIAttempts),
 		extraLetterPrompt: cfg.ExtraLetterPrompt,
 		extraTestPrompt:   cfg.ExtraTestPrompt,
+		contacts:          cfg.Contacts,
 		workers:           cfg.Workers,
 		outputPath:        cfg.OutputPath,
 		reqInterval:       cfg.RequestInterval,
@@ -594,7 +598,7 @@ func (c *AIClient) getChatResponse(body []byte) (string, error) {
 	return strings.TrimSpace(result.Choices[0].Message.Content), nil
 }
 
-func (c *AIClient) GenerateLetter(v Vacancy, resumeTitle, fullName, extraPrompt string) (string, error) {
+func (c *AIClient) GenerateLetter(v Vacancy, resumeTitle, fullName, contacts, extraPrompt string) (string, error) {
 	if err := c.ctx.Err(); err != nil {
 		return "", err
 	}
@@ -607,6 +611,10 @@ func (c *AIClient) GenerateLetter(v Vacancy, resumeTitle, fullName, extraPrompt 
 		resumeTitle,
 		fullName,
 	)
+
+	if strings.TrimSpace(contacts) != "" {
+		userPrompt += "\nВ конце письма укажи мои контакты: " + contacts + "\n"
+	}
 
 	if strings.TrimSpace(extraPrompt) != "" {
 		userPrompt += "\nДополнительно учти следующее:\n" + extraPrompt + "\n"
@@ -861,7 +869,7 @@ func (a *HHAutoApplier) ApplyVacancyWithTest(vacancyID int, letter string) (map[
 		return nil, nil, err
 	}
 
-	logger.Debug("Vacancy tests: %v", tests)
+	// logger.Debug("Vacancy tests: %v", tests)
 
 	test, ok := tests[strconv.Itoa(vacancyID)]
 	if !ok {
@@ -924,8 +932,8 @@ func (a *HHAutoApplier) ApplyVacancyWithTest(vacancyID int, letter string) (map[
 		return nil, nil, err
 	}
 
-	qaPairs := buildReadableTestAnswers(test.Tasks, answers)
-	return respJSON, qaPairs, nil
+	testAnswers := buildReadableTestAnswers(test.Tasks, answers)
+	return respJSON, testAnswers, nil
 }
 
 func (a *HHAutoApplier) fetchVacancyPage(page int) ([]Vacancy, error) {
@@ -989,7 +997,7 @@ func (a *HHAutoApplier) ApplyVacancies() error {
 				if len(vacancy.UserLabels) > 0 {
 					continue
 				}
-				if a.maxResponses > 0 && vacancy.TotalResponsesCount >= a.maxResponses {
+				if a.maxResponses > 0 && vacancy.TotalResponsesCount > a.maxResponses {
 					continue
 				}
 
@@ -1031,7 +1039,19 @@ func (a *HHAutoApplier) ApplyVacancies() error {
 					continue
 				}
 
-				letter, err := a.ai.GenerateLetter(vacancy, a.GetCurrentResumeTitle(), a.GetFullName(), a.extraLetterPrompt)
+				// TODO: remove flag
+				if a.dryRun {
+					logger.Debug("Application skipped (dry-run): %s", vacancyURL)
+					continue
+				}
+
+				letter, err := a.ai.GenerateLetter(
+					vacancy,
+					a.GetCurrentResumeTitle(),
+					a.GetFullName(),
+					a.contacts,
+					a.extraLetterPrompt,
+				)
 				if err != nil {
 					logger.Error("AI failed to generate letter for %s: %v", vacancyURL, err)
 					continue
@@ -1041,15 +1061,12 @@ func (a *HHAutoApplier) ApplyVacancies() error {
 					continue
 				}
 
-				if a.dryRun {
-					logger.Debug("Application skipped (dry-run): %s", vacancyURL)
-					continue
-				}
-
+				logger.Debug("Coverage Letter:\n\n%s", letter)
 				var responseResult map[string]any
-				var qaPairs []QAPair
+				var testAnswers []QAPair
 				if vacancy.UserTestPresent {
-					responseResult, qaPairs, err = a.ApplyVacancyWithTest(vacancy.ID, letter)
+					responseResult, testAnswers, err = a.ApplyVacancyWithTest(vacancy.ID, letter)
+					logger.Debug("Test answers: %v", testAnswers)
 				} else {
 					responseResult, err = a.ApplyVacancy(vacancy.ID, vacancyURL, letter)
 				}
@@ -1066,16 +1083,16 @@ func (a *HHAutoApplier) ApplyVacancies() error {
 				successStr, isString := successVal.(string)
 
 				if ok && isString && successStr == "true" {
-					mu.Lock()
 					newCount := vacancy.TotalResponsesCount + 1
 					logger.Info("Application successfully sent (responses: %d): %s", newCount, vacancyURL)
+					mu.Lock()
 					_ = encoder.Encode(ApplyResult{
 						URL:            vacancyURL,
 						Name:           vacancy.Name,
 						Letter:         letter,
 						AppliedAt:      time.Now(),
 						ResponsesCount: newCount,
-						TestAnswers:    qaPairs,
+						TestAnswers:    testAnswers,
 					})
 					mu.Unlock()
 				} else if !ok {
@@ -1092,6 +1109,52 @@ func (a *HHAutoApplier) ApplyVacancies() error {
 
 func (a *HHAutoApplier) SaveCookies() error {
 	return a.jar.Save(a.cookiesPath)
+}
+
+// TouchResume raises (updates) resume position in search results
+func (a *HHAutoApplier) TouchResume() (bool, error) {
+	if err := a.ctx.Err(); err != nil {
+		return false, err
+	}
+
+	token := a.XSRFToken()
+	if token == "" {
+		return false, errors.New("xsrf token not found")
+	}
+
+	if a.resumeID == "" {
+		return false, errors.New("resumeID is empty")
+	}
+
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+
+	if err := writer.WriteField("resume", a.resumeID); err != nil {
+		return false, err
+	}
+	if err := writer.WriteField("undirectable", "true"); err != nil {
+		return false, err
+	}
+	if err := writer.Close(); err != nil {
+		return false, err
+	}
+
+	headers := map[string]string{
+		"Content-Type":     writer.FormDataContentType(),
+		"Accept":           "application/json",
+		"X-Requested-With": "XMLHttpRequest",
+		"X-Xsrftoken":      token,
+		"X-Hhtmfrom":       "negotiation_list",
+		"X-Hhtmsource":     "resume_list",
+		"Referer":          a.ResolveURL("/applicant/resumes"),
+	}
+
+	resp, err := a.Request(http.MethodPost, "/applicant/resumes/touch", &body, headers)
+	if err != nil {
+		return false, err
+	}
+
+	return resp.Status == http.StatusOK, nil
 }
 
 type MemoryPersistentJar struct {
@@ -1266,7 +1329,7 @@ func parseConfig() (Config, error) {
 	flag.StringVar(&cfg.CookiesPath, "c", filepath.Join(wd, "cookies.txt"), "Path to cookies file")
 	flag.StringVar(&cfg.LogLevel, "l", "info", "Log level (debug, info, warn, error)")
 	flag.StringVar(&cfg.ResumeID, "r", "", "Resume ID (latest will be used if empty)")
-	flag.IntVar(&cfg.MaxResponses, "mr", 0, "Skip vacancies with responses count >= N")
+	flag.IntVar(&cfg.MaxResponses, "mr", 0, "Skip vacancies with responses count > N")
 	flag.BoolVar(&cfg.DryRun, "d", false, "Do not send real applications")
 	flag.StringVar(&cfg.AIBaseURL, "ai-base-url", defaultAIBaseURL, "Base URL for OpenAI-compatible API")
 	flag.StringVar(&cfg.AIModel, "ai-model", defaultAIModel, "AI model name")
@@ -1278,6 +1341,7 @@ func parseConfig() (Config, error) {
 	flag.DurationVar(&cfg.RequestInterval, "request-interval", defaultRequestInterval, "Minimum interval between requests to hh.ru (e.g. 1200ms, 2s)")
 	flag.IntVar(&cfg.Workers, "w", defaultWorkers, "Number of parallel workers")
 	flag.StringVar(&cfg.OutputPath, "o", "", "Path to output file (jsonl). If empty — stdout")
+	flag.StringVar(&cfg.Contacts, "contacts", "", "Contacts to share when employer asks (phone, email, etc)")
 	flag.Parse()
 
 	_ = loadDotEnv(".env")
@@ -1304,6 +1368,10 @@ func parseConfig() (Config, error) {
 	}
 	if !flags["test-prompt"] {
 		cfg.ExtraTestPrompt = envOrDefault("HH_EXTRA_TEST_PROMPT", cfg.ExtraTestPrompt)
+	}
+
+	if !flags["contacts"] {
+		cfg.Contacts = envOrDefault("HH_CONTACTS", cfg.Contacts)
 	}
 
 	if cfg.SearchURL == "" {
@@ -1384,6 +1452,13 @@ func main() {
 	if err != nil {
 		logger.Error("%v", err)
 		os.Exit(1)
+	}
+
+	// Raise resume before starting vacancy processing
+	if updated, _ := applier.TouchResume(); updated {
+		logger.Info("Resume updated.")
+	} else {
+		logger.Warn("Failed to update resume.")
 	}
 
 	if err := applier.ApplyVacancies(); err != nil {
