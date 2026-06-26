@@ -176,7 +176,7 @@ type ChatResult struct {
 	Type        string    `json:"type"`
 	Resume      string    `json:"resume"`
 	ResumeTitle string    `json:"resume_title"`
-	ChatID      int64     `json:"chat_id"`
+	ChatId      int64     `json:"chat_id"`
 	EmployerMsg string    `json:"employer_message"`
 	Reply       string    `json:"reply"`
 	SentAt      time.Time `json:"sent_at"`
@@ -217,7 +217,7 @@ type ChatsList struct {
 }
 
 type ChatListItem struct {
-	ID                               int64             `json:"id"`
+	Id                               int64             `json:"id"`
 	Type                             string            `json:"type"`
 	SubType                          interface{}       `json:"subType"`
 	UnreadCount                      int               `json:"unreadCount"`
@@ -970,7 +970,7 @@ func (r *HHAIResponder) LeaveChat(chatId int64) (map[string]any, error) {
 }
 
 type ChatToReply struct {
-	ID                  int64
+	ChatId              int64
 	ContactName         string
 	ReplyToMessage      string
 	VacancyName         string
@@ -981,17 +981,18 @@ type ChatToReply struct {
 	ResumeID            int64
 	ResumeHash          string
 	ResumeTitle         string
-	ApplicantID         int64
+	ApplicantId         int64
 	FirstName           string
 	LastName            string
 	Salary              string
+	Skills              string
 	IsDiscard           bool
 }
 
 func (r *HHAIResponder) getChatsAwaitingReply(maxPages int) ([]ChatToReply, error) {
-	resumeId := r.GetCurrentResumeId()
-	if resumeId == "" {
-		return nil, errors.New("current resume id not found")
+	resume := r.GetCurrentResume()
+	if resume == nil {
+		return nil, errors.New("resume not found")
 	}
 
 	pages := 1
@@ -1011,12 +1012,12 @@ func (r *HHAIResponder) getChatsAwaitingReply(maxPages int) ([]ChatToReply, erro
 			break
 		}
 
-		var resume ChatResumeResource
+		// var resume ChatResumeResource
 		var resumeExists bool
 		// resume, exists = chatsResponse.Resources.Resumes[chat.Resources.Resume[0]]
 		// if !exists {
 		// Фолбечное резюме, если то, с которого был отклик, удалено
-		resume, resumeExists = chatsResponse.Resources.Resumes[resumeId]
+		_, resumeExists = chatsResponse.Resources.Resumes[fmt.Sprint(resume.Id)]
 		if !resumeExists {
 			//return nil, fmt.Errorf("Resume doesn't exists: %s", resumeId)
 			continue
@@ -1026,7 +1027,7 @@ func (r *HHAIResponder) getChatsAwaitingReply(maxPages int) ([]ChatToReply, erro
 		pages = min(maxPages, chats.Pages)
 
 		for _, chat := range chats.Items {
-			if slices.Contains(r.ignoredChats, chat.ID) {
+			if slices.Contains(r.ignoredChats, chat.Id) {
 				continue
 			}
 
@@ -1049,7 +1050,8 @@ func (r *HHAIResponder) getChatsAwaitingReply(maxPages int) ([]ChatToReply, erro
 
 			// Пропускаем чаты, где соискатель писал последним
 			participantId, _ := strconv.ParseInt(last.ParticipantID, 10, 64)
-			if resume.UserId == participantId {
+			if r.userId == participantId {
+				logger.Debug("Skip chat #%d without response", chat.Id)
 				continue
 			}
 
@@ -1061,7 +1063,7 @@ func (r *HHAIResponder) getChatsAwaitingReply(maxPages int) ([]ChatToReply, erro
 				continue
 			}
 
-			if !slices.Contains(chat.Resources.Resume, fmt.Sprint(resume.Id)) {
+			if !slices.Contains(chat.Resources.Resume, strconv.FormatInt(resume.Id, 10)) {
 				continue
 			}
 
@@ -1080,7 +1082,7 @@ func (r *HHAIResponder) getChatsAwaitingReply(maxPages int) ([]ChatToReply, erro
 			// В принципе можно сделать общение во всех чатах, но сейчас под резюме
 			// сделано
 			chatInfo := ChatToReply{
-				ID:                  chat.ID,
+				ChatId:              chat.Id,
 				ContactName:         last.ParticipantDisplay.Name,
 				ReplyToMessage:      last.Text,
 				ReplyOptions:        options,
@@ -1088,13 +1090,14 @@ func (r *HHAIResponder) getChatsAwaitingReply(maxPages int) ([]ChatToReply, erro
 				VacancyURL:          vacancy.Links.Desktop,
 				CompanyName:         vacancy.Company.Name,
 				VacancyCompensation: strings.Replace(FormatCompensation(vacancy.Compensation), "RUR", "руб", 1),
-				ApplicantID:         resume.UserId,
-				FirstName:           resume.FirstName,
-				LastName:            resume.LastName,
+				ApplicantId:         r.userId,
+				FirstName:           r.firstName,
+				LastName:            r.lastName,
 				ResumeID:            resume.Id,
 				ResumeHash:          resume.Hash,
 				ResumeTitle:         resume.Title,
-				Salary:              strings.Replace(strings.TrimSpace(fmt.Sprintf("%d %s", resume.Salary.Amount, resume.Salary.Currency)), "RUR", "руб", 1),
+				Skills:              resume.Skills,
+				Salary:              resume.Salary,
 			}
 
 			if last.WorkflowTransition != nil && last.WorkflowTransition.ApplicantState == "DISCARD" {
@@ -1142,8 +1145,8 @@ func (r *HHAIResponder) AutoRespondChats() error {
 	for _, chatToReply := range chatsToReply {
 
 		if chatToReply.IsDiscard {
-			logger.Debug("Skip and leave chat with discard: %d", chatToReply.ID)
-			r.LeaveChat(chatToReply.ID)
+			logger.Debug("Skip and leave chat with discard: %d", chatToReply.ChatId)
+			r.LeaveChat(chatToReply.ChatId)
 			continue
 		}
 
@@ -1159,11 +1162,13 @@ func (r *HHAIResponder) AutoRespondChats() error {
 
 Тебя зовут: %s %s.
 Ты ищешь работу в качестве: %s.
-Твои зарплатные ожидания: %s`,
+Твои зарплатные ожидания: %s
+Твои навыки: %s`,
 			chatToReply.FirstName,
 			chatToReply.LastName,
 			chatToReply.ResumeTitle,
 			chatToReply.Salary,
+			chatToReply.Skills,
 		)
 
 		var temperature = 0.5
@@ -1181,14 +1186,14 @@ func (r *HHAIResponder) AutoRespondChats() error {
 				"- "+strings.Join(chatToReply.ReplyOptions, "\n - "),
 			)
 		} else {
-			chatDataResponse, err := r.GetChatData(chatToReply.ID, chatToReply.ApplicantID)
+			chatDataResponse, err := r.GetChatData(chatToReply.ChatId, chatToReply.ApplicantId)
 			if err != nil {
-				logger.Warn("Can't load messages from chat #%d: %v", chatToReply.ID, err)
+				logger.Warn("Can't load messages from chat #%d: %v", chatToReply.ChatId, err)
 				continue
 			}
 			// Свинья запретила ей писать
 			if !chatDataResponse.ChatStates.WriteMessageState.Allowed {
-				r.ignoredChats = append(r.ignoredChats, chatToReply.ID)
+				r.ignoredChats = append(r.ignoredChats, chatToReply.ChatId)
 				continue
 			}
 
@@ -1227,15 +1232,15 @@ func (r *HHAIResponder) AutoRespondChats() error {
 			continue
 		}
 
-		logger.Debug("Reply to chat #%d:\n%s\n%s", chatToReply.ID, chatToReply.ReplyToMessage, reply)
+		logger.Debug("Reply to chat #%d:\n%s\n%s", chatToReply.ChatId, chatToReply.ReplyToMessage, reply)
 
-		if _, err := r.SendChatMessage(chatToReply.ID, reply); err != nil {
-			logger.Error("Failed reply to chat #%d: %v", chatToReply.ID, err)
+		if _, err := r.SendChatMessage(chatToReply.ChatId, reply); err != nil {
+			logger.Error("Failed reply to chat #%d: %v", chatToReply.ChatId, err)
 
 			r.writeEvent(ErrorResult{
 				Type: "chat_reply_error",
 				Context: map[string]any{
-					"chat_id":      chatToReply.ID,
+					"chat_id":      chatToReply.ChatId,
 					"resume":       chatToReply.ResumeHash,
 					"resume_title": chatToReply.ResumeTitle,
 				},
@@ -1243,18 +1248,18 @@ func (r *HHAIResponder) AutoRespondChats() error {
 				Time:  time.Now(),
 			})
 
-			logger.Debug("Ignore chat: %d", chatToReply.ID)
-			r.ignoredChats = append(r.ignoredChats, chatToReply.ID)
+			logger.Debug("Ignore chat: %d", chatToReply.ChatId)
+			r.ignoredChats = append(r.ignoredChats, chatToReply.ChatId)
 			continue
 		}
 
-		logger.Info("Auto-replied in chat %d", chatToReply.ID)
+		logger.Info("Auto-replied in chat %d", chatToReply.ChatId)
 
 		r.writeEvent(ChatResult{
 			Type:        "chat_reply",
 			Resume:      chatToReply.ResumeHash,
 			ResumeTitle: chatToReply.ResumeTitle,
-			ChatID:      chatToReply.ID,
+			ChatId:      chatToReply.ChatId,
 			EmployerMsg: chatToReply.ReplyToMessage,
 			Reply:       reply,
 			SentAt:      time.Now(),
@@ -1311,7 +1316,7 @@ type HHAIResponder struct {
 	resumeHash            string
 	latestResumeHash      string
 	resumes               []ResumeItem
-	userId                int
+	userId                int64
 	firstName             string
 	middleName            string
 	lastName              string
@@ -1427,14 +1432,13 @@ type ResumeTitle struct {
 	String string `json:"string"`
 }
 
-type ResumeAttributes struct {
-	Id   string `json:"id"`
-	Hash string `json:"hash"`
-}
-
 type ResumeItem struct {
-	Title      []ResumeTitle    `json:"title"`
-	Attributes ResumeAttributes `json:"_attributes"`
+	Id     int64
+	Hash   string
+	Title  string
+	Skills string
+	Area   string
+	Salary string
 }
 
 type Logger struct {
@@ -1567,13 +1571,17 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 		return nil, err
 	}
 
-	logger.Debug("Logged in as: %s #%d", responder.GetFullName(), responder.userId)
-
 	if responder.resumeHash == "" {
 		responder.resumeHash = responder.latestResumeHash
 	}
 
-	logger.Debug("Current resume ID: %s (%s)", responder.resumeHash, responder.GetCurrentResumeTitle())
+	resume := responder.GetCurrentResume()
+
+	if resume == nil {
+		return nil, errors.New("resume not found")
+	}
+
+	logger.Debug("Current resume hash=%s (%s)", responder.resumeHash, resume.Title)
 
 	// If baseURL not provided via -u, resolve from redirect_host cookie for .hh.ru
 	if responder.baseURL == nil {
@@ -1632,22 +1640,33 @@ func (r *HHAIResponder) buildRequest(method, endpoint string, body io.Reader, he
 	return req, nil
 }
 
-func (r *HHAIResponder) GetCurrentResumeTitle() string {
-	for _, resume := range r.resumes {
-		if resume.Attributes.Hash == r.resumeHash {
-			return resume.Title[0].String
+// func (r *HHAIResponder) GetCurrentResumeTitle() string {
+// 	for _, resume := range r.resumes {
+// 		if resume.Hash == r.resumeHash {
+// 			return resume.Title
+// 		}
+// 	}
+// 	return ""
+// }
+//
+// func (r *HHAIResponder) GetCurrentResumeId() int64 {
+// 	for _, resume := range r.resumes {
+// 		if resume.Hash == r.resumeHash {
+// 			return resume.Id
+// 		}
+// 	}
+// 	return -1
+// }
+
+func (r *HHAIResponder) GetCurrentResume() *ResumeItem {
+	for _, res := range r.resumes {
+		if res.Hash == r.resumeHash {
+			return &res
 		}
 	}
-	return ""
+	return nil
 }
-func (r *HHAIResponder) GetCurrentResumeId() string {
-	for _, resume := range r.resumes {
-		if resume.Attributes.Hash == r.resumeHash {
-			return resume.Attributes.Id
-		}
-	}
-	return ""
-}
+
 func (r *HHAIResponder) GetFullName() string {
 	return fmt.Sprintf("%s %s", r.firstName, r.lastName)
 }
@@ -1759,7 +1778,7 @@ func (c *AIClient) getChatResponse(body []byte) (string, error) {
 	return strings.TrimSpace(result.Choices[0].Message.Content), nil
 }
 
-func (c *AIClient) GenerateLetter(v Vacancy, fullName, resumeTitle, contacts, extraPrompt string) (string, error) {
+func (c *AIClient) GenerateLetter(v Vacancy, fullName, resumeTitle, salary, skills, contacts, extraPrompt string) (string, error) {
 	if err := c.ctx.Err(); err != nil {
 		return "", err
 	}
@@ -1767,7 +1786,9 @@ func (c *AIClient) GenerateLetter(v Vacancy, fullName, resumeTitle, contacts, ex
 В нем ты должен написать почему эта вакансия идеально подходит тебе.
 Не используй в нем markdown, списки и пояснения.
 Тебя зовут: %s
-Ты ищешь работу в качестве: %s`, fullName, resumeTitle)
+Ты ищешь работу в качестве: %s
+Зарплата: %s
+Твои навыки: %s`, fullName, resumeTitle, salary, skills)
 
 	if strings.TrimSpace(contacts) != "" {
 		systemPrompt += "\nКонтакты для указания в письме: " + contacts
@@ -1882,57 +1903,94 @@ func (r *HHAIResponder) loadProfileData() error {
 
 	bodyText := string(resp.Body)
 
-	target := `"applicantResumes":`
+	target := `{"redirectConfig":`
 	idx := strings.Index(bodyText, target)
 	if idx == -1 {
 		return errors.New("applicantResumes block not found on page")
 	}
 
-	jsonStart := bodyText[idx+len(target):]
+	jsonStart := bodyText[idx:]
+	logger.Debug("%.255s", jsonStart)
 
-	var resumesList []ResumeItem
+	var resumesData struct {
+		LatestResumeHash string `json:"latestResumeHash"`
+		ApplicantResumes []struct {
+			Attributes struct {
+				Id   string `json:"id"`
+				Hash string `json:"hash"`
+			} `json:"_attributes"`
+			Title []struct {
+				String string `json:"string"`
+			} `json:"title"`
+			Salary []struct {
+				Amount   int    `json:"amount"`
+				Currency string `json:"currency"`
+			} `json:"salary"`
+			Area []struct {
+				Title string `json:"title"`
+			} `json:"area"`
+			KeySkills []struct {
+				String string `json:"string"`
+			} `json:"keySkills"`
+		} `json:"applicantResumes"`
+		Account struct {
+			FirstName  string `json:"firstName"`
+			MiddleName string `json:"middleName"`
+			LastName   string `json:"lastName"`
+			Email      string `json:"email"`
+		} `json:"account"`
+	}
+
+	// if err := json.Unmarshal([]byte(jsonStart), &resumesData); err != nil {
+	// 	return fmt.Errorf("failed to parse resumes: %w", err)
+	// }
+
 	decoder := json.NewDecoder(strings.NewReader(jsonStart))
-	if err := decoder.Decode(&resumesList); err != nil {
-		return fmt.Errorf("failed to partially parse resumes: %w", err)
+	if err := decoder.Decode(&resumesData); err != nil {
+		return fmt.Errorf("failed to parse resumes: %w", err)
 	}
 
-	if len(resumesList) == 0 {
-		return errors.New("no resumes found in applicantResumes list")
+	r.latestResumeHash = resumesData.LatestResumeHash
+	r.firstName = resumesData.Account.FirstName
+	r.middleName = resumesData.Account.MiddleName
+	r.lastName = resumesData.Account.LastName
+	r.email = resumesData.Account.Email
+
+	r.resumes = make([]ResumeItem, 0, len(resumesData.ApplicantResumes))
+	for _, resume := range resumesData.ApplicantResumes {
+		id, _ := strconv.ParseInt(resume.Attributes.Id, 10, 64)
+
+		var title string
+		if len(resume.Title) > 0 {
+			title = resume.Title[0].String
+		}
+
+		var area string
+		if len(resume.Area) > 0 {
+			area = resume.Area[0].Title
+		}
+
+		var skills []string
+		for _, skill := range resume.KeySkills {
+			skills = append(skills, skill.String)
+		}
+
+		var salaryAmount int
+		var salaryCurrency string
+		if len(resume.Salary) > 0 {
+			salaryAmount = resume.Salary[0].Amount
+			salaryCurrency = resume.Salary[0].Currency
+		}
+
+		r.resumes = append(r.resumes, ResumeItem{
+			Id:     id,
+			Hash:   resume.Attributes.Hash,
+			Title:  title,
+			Area:   area,
+			Skills: strings.Join(skills, ", "),
+			Salary: strings.Replace(fmt.Sprintf("%d %s", salaryAmount, salaryCurrency), "RUR", "руб", 1),
+		})
 	}
-
-	r.resumes = resumesList
-
-	var matches []string
-	matches = latesteResumeHashRegexp.FindStringSubmatch(bodyText)
-	if len(matches) < 2 {
-		return errors.New("latestResumeHash not found")
-	}
-	r.latestResumeHash = string(matches[1])
-
-	matches = userIdRegexp.FindStringSubmatch(bodyText)
-	if len(matches) < 2 {
-		return errors.New("userId not found")
-	}
-	r.userId, _ = strconv.Atoi(matches[1])
-
-	targetAccount := `"account":`
-	idxAccount := strings.Index(bodyText, targetAccount)
-	if idxAccount == -1 {
-		return errors.New("account block not found on page")
-	}
-
-	jsonStartAccount := bodyText[idxAccount+len(targetAccount):]
-
-	var acc AccountInfo
-	decoderAccount := json.NewDecoder(strings.NewReader(jsonStartAccount))
-	if err := decoderAccount.Decode(&acc); err != nil {
-		return fmt.Errorf("failed to partially parse account: %w", err)
-	}
-
-	r.firstName = acc.FirstName
-	r.middleName = acc.MiddleName
-	r.lastName = acc.LastName
-	r.email = acc.Email
 
 	return nil
 }
@@ -2132,6 +2190,11 @@ func (r *HHAIResponder) fetchVacancyPage(page int) ([]Vacancy, error) {
 }
 
 func (r *HHAIResponder) ApplyVacancies() error {
+	resume := r.GetCurrentResume()
+	if resume == nil {
+		return errors.New("resume not found")
+	}
+
 	for page := 0; ; page++ {
 		if r.ctx.Err() != nil {
 			return r.ctx.Err()
@@ -2174,7 +2237,9 @@ func (r *HHAIResponder) ApplyVacancies() error {
 				letter, err = r.ai.GenerateLetter(
 					vacancy,
 					r.GetFullName(),
-					r.GetCurrentResumeTitle(),
+					resume.Title,
+					resume.Salary,
+					resume.Skills,
 					r.contacts,
 					r.extraLetterPrompt,
 				)
@@ -2211,7 +2276,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 						"vacancy_name": vacancy.Name,
 						"url":          vacancyURL,
 						"resume":       r.resumeHash,
-						"resume_title": r.GetCurrentResumeTitle(),
+						"resume_title": resume.Title,
 					},
 					Error: err.Error(),
 					Time:  time.Now(),
@@ -2229,7 +2294,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 				r.writeEvent(ApplyResult{
 					Type:           "application",
 					Resume:         r.resumeHash,
-					ResumeTitle:    r.GetCurrentResumeTitle(),
+					ResumeTitle:    resume.Title,
 					VacancyID:      vacancy.ID,
 					URL:            vacancyURL,
 					Name:           vacancy.Name,
@@ -2742,7 +2807,7 @@ func (r *HHAIResponder) Run() {
 			select {
 			case <-r.ctx.Done():
 				return
-			case <-time.After(24 * time.Hour):
+			case <-time.After(8 * time.Hour):
 			}
 		}
 	}()
@@ -2793,7 +2858,7 @@ func main() {
 
 	if cfg.ListResumes {
 		for _, res := range responder.resumes {
-			fmt.Printf("%s\t%s\n", res.Attributes.Hash, res.Title[0].String)
+			fmt.Printf("%s\t%s\n", res.Hash, res.Title)
 		}
 		return
 	}
