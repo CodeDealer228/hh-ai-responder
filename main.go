@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"html"
 	"io"
 	"log"
 	"mime/multipart"
@@ -784,6 +785,7 @@ func FormatCompensation(c *Compensation) string {
 }
 
 // ===== Chat API Methods =====
+// TODO: там есть вебсокеты для получения новых сообщений в реальном времени
 func (r *HHAIResponder) GetChats(page int) (*ChatsResponse, error) {
 	token := r.XSRFToken()
 	if token == "" {
@@ -793,10 +795,10 @@ func (r *HHAIResponder) GetChats(page int) (*ChatsResponse, error) {
 		"Accept":           "application/json",
 		"X-Requested-With": "XMLHttpRequest",
 		"X-Xsrftoken":      token,
-		"Referer":          "https://chatik.hh.ru/?platform=xhh&dest=iframe",
+		"Referer":          r.chatURL + "/?platform=xhh&dest=iframe",
 	}
 
-	endpoint := "https://chatik.hh.ru/chatik/api/chats?filterUnread=false&filterHasTextMessage=false&do_not_track_session_events=true"
+	endpoint := r.chatURL + "/chatik/api/chats?filterUnread=false&filterHasTextMessage=false&do_not_track_session_events=true"
 	if page > 0 {
 		endpoint += "&page=" + strconv.Itoa(page)
 	}
@@ -827,11 +829,12 @@ func (r *HHAIResponder) GetChatData(chatID int64, applicantID int64) (*ChatDataR
 		"Accept":           "application/json",
 		"X-Requested-With": "XMLHttpRequest",
 		"X-Xsrftoken":      token,
-		"Referer":          fmt.Sprintf("https://chatik.hh.ru/chat/%d", chatID),
+		"Referer":          fmt.Sprintf("%s/chat/%d", r.chatURL, chatID),
 	}
 
 	endpoint := fmt.Sprintf(
-		"https://chatik.hh.ru/chatik/api/chat_data?chatId=%d&applicantId=%d&do_not_track_session_events=true",
+		"%s/chatik/api/chat_data?chatId=%d&applicantId=%d&do_not_track_session_events=true",
+		r.chatURL,
 		chatID,
 		applicantID,
 	)
@@ -897,12 +900,12 @@ func (r *HHAIResponder) SendChatMessage(chatID int64, text string) (map[string]a
 		"Accept":           "application/json",
 		"X-Requested-With": "XMLHttpRequest",
 		"X-Xsrftoken":      token,
-		"Referer":          "https://chatik.hh.ru/?platform=xhh&dest=iframe",
+		"Referer":          r.chatURL + "/?platform=xhh&dest=iframe",
 	}
 
 	req, err := r.buildRequest(
 		http.MethodPost,
-		"https://chatik.hh.ru/chatik/api/send",
+		r.chatURL+"/chatik/api/send",
 		bytes.NewReader(body),
 		headers,
 	)
@@ -943,7 +946,7 @@ func (r *HHAIResponder) LeaveChat(chatId int64) (map[string]any, error) {
 	headers := map[string]string{
 		"Accept":            "application/json",
 		"Content-Type":      "application/json",
-		"Referer":           fmt.Sprintf("https://chatik.hh.ru/chat/%d", chatId),
+		"Referer":           fmt.Sprintf("%s/chat/%d", r.chatURL, chatId),
 		"X-Requested-With":  "XMLHttpRequest",
 		"X-Xsrftoken":       token,
 		"X-hhtmFrom":        "resume",
@@ -952,7 +955,7 @@ func (r *HHAIResponder) LeaveChat(chatId int64) (map[string]any, error) {
 		"X-hhtmSourceLabel": "resume",
 	}
 
-	req, err := r.buildRequest(http.MethodPost, "https://chatik.hh.ru/chatik/api/leave", bytes.NewReader(body), headers)
+	req, err := r.buildRequest(http.MethodPost, r.chatURL+"/chatik/api/leave", bytes.NewReader(body), headers)
 	if err != nil {
 		return nil, err
 	}
@@ -1328,6 +1331,7 @@ type HHAIResponder struct {
 	outputPath            string
 	forceLetter           bool
 	extraChatReplyPrompt  string
+	chatURL               string
 	ignoredChats          []int64
 
 	eventWriter io.Writer
@@ -1567,9 +1571,11 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 	responder.eventWriter = out
 	responder.searchParams = searchParams
 
-	if err := responder.loadProfileData(); err != nil {
+	if err := responder.LoadProfileData(); err != nil {
 		return nil, err
 	}
+
+	logger.Debug("You are logged as: %s #%d", responder.GetFullName(), responder.userId)
 
 	if responder.resumeHash == "" {
 		responder.resumeHash = responder.latestResumeHash
@@ -1778,12 +1784,13 @@ func (c *AIClient) getChatResponse(body []byte) (string, error) {
 	return strings.TrimSpace(result.Choices[0].Message.Content), nil
 }
 
-func (c *AIClient) GenerateLetter(v Vacancy, fullName, resumeTitle, salary, skills, contacts, extraPrompt string) (string, error) {
+func (c *AIClient) GenerateLetter(v Vacancy, vacancyDescription, fullName, resumeTitle, salary, skills, contacts, extraPrompt string) (string, error) {
 	if err := c.ctx.Err(); err != nil {
 		return "", err
 	}
 	systemPrompt := fmt.Sprintf(`Ты должен сгенерировать сопроводительное письмо для отклика на вакансию от имени соискателя.
 В нем ты должен написать почему эта вакансия идеально подходит тебе.
+Утверждай, что обладаешь всеми необходимыми навыками в требованиях к вакансии.
 Не используй в нем markdown, списки и пояснения.
 Тебя зовут: %s
 Ты ищешь работу в качестве: %s
@@ -1799,9 +1806,10 @@ func (c *AIClient) GenerateLetter(v Vacancy, fullName, resumeTitle, salary, skil
 	}
 
 	userPrompt := fmt.Sprintf(
-		"Название вакансии: %s\nКомпания: %s",
+		"Название вакансии: %s\nКомпания: %s\nОписание вакансии:\n%s",
 		v.Name,
 		v.Company.Name,
+		vacancyDescription,
 	)
 
 	return c.Chat(systemPrompt, userPrompt, 512, 0.8)
@@ -1882,7 +1890,7 @@ func (c *AIClient) AnswerTest(tasks []Task, contacts, extraPrompt string) (map[i
 	return results, nil
 }
 
-func (r *HHAIResponder) loadProfileData() error {
+func (r *HHAIResponder) LoadProfileData() error {
 	if err := r.ctx.Err(); err != nil {
 		return err
 	}
@@ -1906,7 +1914,7 @@ func (r *HHAIResponder) loadProfileData() error {
 	target := `{"redirectConfig":`
 	idx := strings.Index(bodyText, target)
 	if idx == -1 {
-		return errors.New("applicantResumes block not found on page")
+		return errors.New("redirect config not found on page")
 	}
 
 	jsonStart := bodyText[idx:]
@@ -1918,6 +1926,7 @@ func (r *HHAIResponder) loadProfileData() error {
 			Attributes struct {
 				Id   string `json:"id"`
 				Hash string `json:"hash"`
+				//UserId string `json:"user"`
 			} `json:"_attributes"`
 			Title []struct {
 				String string `json:"string"`
@@ -1939,6 +1948,12 @@ func (r *HHAIResponder) loadProfileData() error {
 			LastName   string `json:"lastName"`
 			Email      string `json:"email"`
 		} `json:"account"`
+		UserNotifications []struct {
+			UserId int64 `json:"userId"`
+		} `json:"userNotifications"`
+		Chatik struct {
+			ChatikOrigin string `json:"chatikOrigin"`
+		} `json:"chatik"`
 	}
 
 	// if err := json.Unmarshal([]byte(jsonStart), &resumesData); err != nil {
@@ -1955,6 +1970,8 @@ func (r *HHAIResponder) loadProfileData() error {
 	r.middleName = resumesData.Account.MiddleName
 	r.lastName = resumesData.Account.LastName
 	r.email = resumesData.Account.Email
+	r.userId = resumesData.UserNotifications[0].UserId
+	r.chatURL = resumesData.Chatik.ChatikOrigin
 
 	r.resumes = make([]ResumeItem, 0, len(resumesData.ApplicantResumes))
 	for _, resume := range resumesData.ApplicantResumes {
@@ -2081,7 +2098,50 @@ func (r *HHAIResponder) ApplyVacancy(vacancyID int, refererURL, letter string) (
 	return r.SendResponse(payload, refererURL)
 }
 
-func (r *HHAIResponder) ApplyVacancyWithTest(vacancyID int, letter string) (map[string]any, []QAPair, error) {
+func (r *HHAIResponder) GetVacancyDescription(vacancyId int) (string, error) {
+	if err := r.ctx.Err(); err != nil {
+		return "", err
+	}
+
+	req, err := r.buildRequest(http.MethodGet, fmt.Sprintf("/vacancy/%d?hhtmFrom=negotiation_list", vacancyId), nil, nil)
+	if err != nil {
+		return "", err
+	}
+
+	resp, err := r.requester.Do(req)
+	if err != nil {
+		return "", err
+	}
+
+	if resp.Status != http.StatusOK {
+		return "", unexpectedHTTPStatus(resp.Status)
+	}
+
+	bodyText := string(resp.Body)
+
+	target := `{"redirectConfig":`
+	idx := strings.Index(bodyText, target)
+	if idx == -1 {
+		return "", errors.New("redirect config not found on page")
+	}
+
+	jsonStart := bodyText[idx:]
+
+	var vacancyData struct {
+		VacancyView struct {
+			Description string `json:"description"`
+		} `json:"vacancyView"`
+	}
+
+	decoder := json.NewDecoder(strings.NewReader(jsonStart))
+	if err := decoder.Decode(&vacancyData); err != nil {
+		return "", fmt.Errorf("failed to parse vacancy: %w", err)
+	}
+
+	return html.UnescapeString(vacancyData.VacancyView.Description), nil
+}
+
+func (r *HHAIResponder) ApplyVacancyWithTest(vacancyId int, letter string) (map[string]any, []QAPair, error) {
 	if err := r.ctx.Err(); err != nil {
 		return nil, nil, err
 	}
@@ -2090,19 +2150,19 @@ func (r *HHAIResponder) ApplyVacancyWithTest(vacancyID int, letter string) (map[
 		return nil, nil, errors.New("xsrf token not found")
 	}
 
-	responseURL := r.ResolveURL(fmt.Sprintf("/applicant/vacancy_response?vacancyId=%d&startedWithQuestion=false&hhtmFrom=vacancy", vacancyID))
+	responseURL := r.ResolveURL(fmt.Sprintf("/applicant/vacancy_response?vacancyId=%d&startedWithQuestion=false&hhtmFrom=vacancy", vacancyId))
 	tests, err := r.GetVacancyTests(responseURL)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	test, ok := tests[strconv.Itoa(vacancyID)]
+	test, ok := tests[strconv.Itoa(vacancyId)]
 	if !ok {
-		return nil, nil, fmt.Errorf("vacancy marked with test but no test data found for vacancy %d", vacancyID)
+		return nil, nil, fmt.Errorf("vacancy marked with test but no test data found for vacancy %d", vacancyId)
 	}
 
 	if len(test.Tasks) == 0 {
-		return nil, nil, fmt.Errorf("vacancy marked with test but no tasks returned for vacancy %d", vacancyID)
+		return nil, nil, fmt.Errorf("vacancy marked with test but no tasks returned for vacancy %d", vacancyId)
 	}
 
 	payload := url.Values{
@@ -2111,7 +2171,7 @@ func (r *HHAIResponder) ApplyVacancyWithTest(vacancyID int, letter string) (map[
 		"guid":             {test.GUID},
 		"startTime":        {test.StartTime},
 		"testRequired":     {test.Required},
-		"vacancy_id":       {strconv.Itoa(vacancyID)},
+		"vacancy_id":       {strconv.Itoa(vacancyId)},
 		"resume_hash":      {r.resumeHash},
 		"ignore_postponed": {"true"},
 		"incomplete":       {"false"},
@@ -2234,8 +2294,16 @@ func (r *HHAIResponder) ApplyVacancies() error {
 
 			var letter string
 			if vacancy.ResponseLetterRequired || r.forceLetter {
+				vacancyDescription, _ := r.GetVacancyDescription(vacancy.ID)
+
+				if vacancyDescription == "" {
+					logger.Warn("Vacancy is missing a description: %s", vacancyURL)
+					continue
+				}
+
 				letter, err = r.ai.GenerateLetter(
 					vacancy,
+					vacancyDescription,
 					r.GetFullName(),
 					resume.Title,
 					resume.Salary,
