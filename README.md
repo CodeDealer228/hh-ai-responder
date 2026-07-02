@@ -62,16 +62,16 @@ cp example.env .env
 
 Поддерживаемые переменные приложения:
 
-| Переменная                    | Флаг                  | Назначение                                                             |
-| ----------------------------- | --------------------- | ---------------------------------------------------------------------- |
-| `HH_SEARCH_URL`               | `-u`                  | URL для поиска вакансий.                                               |
-| `HH_AI_BASE_URL`              | `-ai-base-url`        | Базовый URL OpenAI-compatible API.                                     |
-| `HH_AI_MODEL`                 | `-ai-model`           | Модель AI.                                                             |
-| `HH_AI_API_KEY`               | `-ai-api-key`         | API key для OpenAI-compatible API.                                     |
-| `HH_EXTRA_LETTER_PROMPT`      | `-letter-prompt`      | Дополнительные инструкции для сопроводительного письма.                |
-| `HH_EXTRA_TEST_ANSWER_PROMPT` | `-test-answer-prompt` | Дополнительные инструкции для решения тестов.                          |
-| `HH_EXTRA_CHAT_REPLY_PROMPT`  | `-chat-reply-prompt`  | Дополнительные инструкции для ответов в чатах с работодателями.        |
-| `HH_CONTACTS`                 | `-contacts`           | Контакты (телефон, email и т.д.), которые будут добавлены в сообщение. |
+| Переменная             | Флаг                 | Назначение                                                             |
+| ---------------------- | -------------------- | ---------------------------------------------------------------------- |
+| `HH_SEARCH_URL`        | `-u`                 | URL для поиска вакансий.                                               |
+| `HH_AI_BASE_URL`       | `-ai-base-url`       | Базовый URL OpenAI-compatible API.                                     |
+| `HH_AI_MODEL`          | `-ai-model`          | Модель AI.                                                             |
+| `HH_AI_API_KEY`        | `-ai-api-key`        | API key для OpenAI-compatible API.                                     |
+| `HH_LETTER_PROMPT`     | `-letter-prompt`     | Дополнительные инструкции для сопроводительного письма.                |
+| `HH_SOLUTION_PROMPT`   | `-solution-prompt`   | Дополнительные инструкции для решения тестов.                          |
+| `HH_CHAT_REPLY_PROMPT` | `-chat-reply-prompt` | Дополнительные инструкции для ответов в чатах с работодателями.        |
+| `HH_CONTACTS`          | `-contacts`          | Контакты (телефон, email и т.д.), которые будут добавлены в сообщение. |
 
 Например, для Chat-GPT нужно указать сл:
 

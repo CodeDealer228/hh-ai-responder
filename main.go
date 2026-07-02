@@ -61,24 +61,24 @@ var (
 )
 
 type Config struct {
-	SearchURL             string
-	CookiesPath           string
-	LogLevel              string
-	Resume                string
-	MaxResponses          int
-	AIBaseURL             string
-	AIModel               string
-	AIAPIKey              string
-	AITimeout             time.Duration
-	AIAttempts            int
-	ExtraLetterPrompt     string
-	ExtraTestAnswerPrompt string
-	RequestInterval       time.Duration
-	OutputPath            string
-	Contacts              string
-	ListResumes           bool
-	ForceLetter           bool
-	ExtraChatReplyPrompt  string
+	SearchURL               string
+	CookiesPath             string
+	LogLevel                string
+	Resume                  string
+	MaxResponses            int
+	AIBaseURL               string
+	AIModel                 string
+	AIAPIKey                string
+	AITimeout               time.Duration
+	AIAttempts              int
+	ExtraLetterPrompt       string
+	ExtraTestSolutionPrompt string
+	RequestInterval         time.Duration
+	OutputPath              string
+	Contacts                string
+	ListResumes             bool
+	ForceLetter             bool
+	ExtraChatReplyPrompt    string
 }
 
 type Vacancy struct {
@@ -144,20 +144,20 @@ type Solution struct {
 	Value string `json:"value"`
 }
 
-type TestAnswersResponse struct {
-	Answers []TestAnswer `json:"answers"`
+type TestSolutionsResponse struct {
+	Solutions []TestSolution `json:"solutions"`
 }
 
-type TestAnswer struct {
-	TaskID     int    `json:"task_id"`
-	SolutionID *int   `json:"solution_id,omitempty"`
-	TextAnswer string `json:"text_answer,omitempty"`
+type TestSolution struct {
+	TaskID       int    `json:"task_id"`
+	SolutionID   *int   `json:"solution_id,omitempty"`
+	TextSolution string `json:"text_solution,omitempty"`
 }
 
-type TestFormAnswer struct {
-	SolutionID int
-	TextAnswer string
-	HasChoice  bool
+type SolutionFields struct {
+	SolutionID   int
+	TextSolution string
+	HasChoice    bool
 }
 
 type ApplyResult struct {
@@ -170,7 +170,7 @@ type ApplyResult struct {
 	Letter         string    `json:"letter"`
 	AppliedAt      time.Time `json:"applied_at"`
 	ResponsesCount int       `json:"responses_count"`
-	TestAnswers    []QAPair  `json:"test_answers,omitempty"`
+	TestSolutions  []QAPair  `json:"test_solutions,omitempty"`
 }
 
 type ChatResult struct {
@@ -724,11 +724,7 @@ type ChatVacancyResource struct {
 		SiteURL string `json:"companySiteUrl,omitempty"`
 		Trusted bool   `json:"trusted,omitempty"`
 	} `json:"company"`
-
-	// 👉 ССЫЛКА НА ВАКАНСИЮ (добавлено)
-	Links VacancyLinks `json:"links"`
-
-	// 👉 КОМПЕНСАЦИЯ (добавлено)
+	Links        VacancyLinks  `json:"links"`
 	Compensation *Compensation `json:"compensation,omitempty"`
 }
 
@@ -984,6 +980,7 @@ type ChatToReply struct {
 	ResumeID            int64
 	ResumeHash          string
 	ResumeTitle         string
+	ResumeExperience    string
 	ApplicantId         int64
 	FirstName           string
 	LastName            string
@@ -1096,6 +1093,7 @@ func (r *HHAIResponder) getChatsAwaitingReply(maxPages int) ([]ChatToReply, erro
 				ApplicantId:         r.userId,
 				FirstName:           r.firstName,
 				LastName:            r.lastName,
+				ResumeExperience:    r.resumeExperience,
 				ResumeID:            resume.Id,
 				ResumeHash:          resume.Hash,
 				ResumeTitle:         resume.Title,
@@ -1166,12 +1164,16 @@ func (r *HHAIResponder) AutoRespondChats() error {
 Тебя зовут: %s %s.
 Ты ищешь работу в качестве: %s.
 Твои зарплатные ожидания: %s
-Твои навыки: %s`,
+Твои навыки: %s
+Твой опыт:
+
+%s`,
 			chatToReply.FirstName,
 			chatToReply.LastName,
 			chatToReply.ResumeTitle,
 			chatToReply.Salary,
 			chatToReply.Skills,
+			chatToReply.ResumeExperience,
 		)
 
 		var temperature = 0.5
@@ -1195,7 +1197,8 @@ func (r *HHAIResponder) AutoRespondChats() error {
 				continue
 			}
 			// Свинья запретила ей писать
-			if !chatDataResponse.ChatStates.WriteMessageState.Allowed {
+			if !chatDataResponse.ChatStates.WriteMessageState.Allowed || len(chatDataResponse.Chat.Messages.Items) >= 20 {
+				logger.Debug("Ignore chat #%d", chatDataResponse.Chat.ID)
 				r.ignoredChats = append(r.ignoredChats, chatToReply.ChatId)
 				continue
 			}
@@ -1208,18 +1211,20 @@ func (r *HHAIResponder) AutoRespondChats() error {
 
 Правила:
 
-1. Отправляй контакты в сообщении ТОЛЬКО тогда и НИКОГДА ИНАЧЕ, когда тебя об этом просит работодатель И в истории переписки их нет.
-2. Если просят выполнить тестовое задание, ответь, что у тебя нет времени на выполнение, отправь ссылку на Github, что вместо проверки тестового задания они могут посмотреть твои проекты в репозитории.
+1. Отправляй контакты в сообщении в следующих случаев:
+   - Количество сообщений в истории переписки >= 19.
+   - Тебя прямо просят об этом.
+2. Если просят выполнить тестовое задание, отвечай, что у тебя нет времени на его выполнение, отправь ссылку на Github, и напиши, что вместо проверки тестового задания можно посмотреть рабочий код в репозитории, написанный до того, как появились нейронные сети.
 3. Если просят заполнить форму, анкету или гугл-док, ответь, что у тебя нет времени на заполнение.
-4. Если спрашивают "ты бот?" или "кто тебя создал?", ответь строго этим текстом: "Я программа, разработанная пользователем Github s3rgeym. Автор устал от общения с ботами на дегенеративных сетях и глупыми HR-менеджерами, верящими в таро и нейро-оракулов, поэтому автоматизировал общение".
-5. Если собеседник — робот или ИИ, пиши максимально кратко, сухо, без приветствий и вежливости.
-6. Ссылка на Github по умолчанию — %s, если далее не задана другая.
-7. Если спрашивают зарплатные ожидания:
-   - Если сумма меньше 20000 руб, 100 USD или 100 EUR, пересчитай и укажи стоимость за 1 час работы.
-   - Если сумма больше, укажи стоимость за 1 месяц.
-   - В конце ответа о зарплате всегда добавляй: "Зарплатные ожидания могут быть скорректированы в большую или меньшую сторону в зависимости от нагрузки".`, chatToReply.VacancyName, chatToReply.VacancyCompensation, chatToReply.CompanyName, chatToReply.ContactName, defaultGithubURL)
+4. Если в имени контактного лица содержатся слова робот, бот или ии, то отвечай максимально кратко, сухо, без приветствий и вежливости.
+5. Ссылка на Github по умолчанию — %s, если далее не задана другая.
+6. Если спрашивают зарплатные ожидания:
+   - Если сумма меньше 20000 руб, 100 USD или 100 EUR, то указанная сумма — это почасовая оплата.
+   - Если сумма больше, то это месячная компенсация.
+   - В конце ответа пиши, что оплата зависит от нагрузки и может быть скорректирована как в меньшую так и большую сторону.
+7. Если сообщение работодателя не предполагает ответа, то отвечай как-то однословно, например, ок, хорошо либо точкой и т.п.`, chatToReply.VacancyName, chatToReply.VacancyCompensation, chatToReply.CompanyName, chatToReply.ContactName, defaultGithubURL)
 			chatHistory := JoinChatMessages(chatDataResponse)
-			userPrompt += "Учитывай историю переписки:\n\n" + chatHistory
+			userPrompt += "История переписки:\n\n" + chatHistory
 		}
 
 		if strings.TrimSpace(r.contacts) != "" {
@@ -1272,8 +1277,8 @@ func (r *HHAIResponder) AutoRespondChats() error {
 	return nil
 }
 
-// buildReadableTestAnswers converts test tasks and AI answers to human-readable question/answer pairs
-func buildReadableTestAnswers(tasks []Task, answers map[int]TestFormAnswer) []QAPair {
+// buildReadableTestSolutions converts test tasks and AI answers to human-readable question/answer pairs
+func buildReadableTestSolutions(tasks []Task, answers map[int]SolutionFields) []QAPair {
 	var result []QAPair
 	for _, task := range tasks {
 		ans, ok := answers[task.ID]
@@ -1290,7 +1295,7 @@ func buildReadableTestAnswers(tasks []Task, answers map[int]TestFormAnswer) []QA
 				}
 			}
 		} else {
-			answerText = ans.TextAnswer
+			answerText = ans.TextSolution
 		}
 
 		result = append(result, QAPair{
@@ -1308,31 +1313,33 @@ type HHResponse struct {
 }
 
 type HHAIResponder struct {
-	ctx                   context.Context
-	baseURL               *url.URL
-	searchParams          url.Values
-	cookiesPath           string
-	maxResponses          int
-	client                *http.Client
-	jar                   *MemoryPersistentJar
-	requester             *HHRequester
-	resumeHash            string
-	latestResumeHash      string
-	resumes               []ResumeItem
-	userId                int64
-	firstName             string
-	middleName            string
-	lastName              string
-	email                 string
-	ai                    *AIClient
-	extraLetterPrompt     string
-	extraTestAnswerPrompt string
-	contacts              string
-	outputPath            string
-	forceLetter           bool
-	extraChatReplyPrompt  string
-	chatURL               string
-	ignoredChats          []int64
+	ctx                     context.Context
+	baseURL                 *url.URL
+	searchParams            url.Values
+	cookiesPath             string
+	maxResponses            int
+	client                  *http.Client
+	jar                     *MemoryPersistentJar
+	requester               *HHRequester
+	resumeHash              string
+	resumeExperience        string
+	latestResumeHash        string
+	resumes                 []ResumeItem
+	userId                  int64
+	firstName               string
+	middleName              string
+	lastName                string
+	email                   string
+	ai                      *AIClient
+	extraLetterPrompt       string
+	extraTestSolutionPrompt string
+	contacts                string
+	outputPath              string
+	forceLetter             bool
+	extraChatReplyPrompt    string
+	chatURL                 string
+	resumeProfileFrontURL   string
+	ignoredChats            []int64
 
 	eventWriter io.Writer
 	eventMu     sync.Mutex
@@ -1540,20 +1547,20 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 	}
 
 	responder := &HHAIResponder{
-		ctx:                   ctx,
-		baseURL:               baseURL,
-		cookiesPath:           cfg.CookiesPath,
-		maxResponses:          cfg.MaxResponses,
-		client:                client,
-		jar:                   jar,
-		resumeHash:            cfg.Resume,
-		ai:                    NewAIClient(ctx, cfg.AIBaseURL, cfg.AIModel, cfg.AIAPIKey, cfg.AITimeout, cfg.AIAttempts),
-		extraLetterPrompt:     cfg.ExtraLetterPrompt,
-		extraTestAnswerPrompt: cfg.ExtraTestAnswerPrompt,
-		contacts:              cfg.Contacts,
-		outputPath:            cfg.OutputPath,
-		forceLetter:           cfg.ForceLetter,
-		extraChatReplyPrompt:  cfg.ExtraChatReplyPrompt,
+		ctx:                     ctx,
+		baseURL:                 baseURL,
+		cookiesPath:             cfg.CookiesPath,
+		maxResponses:            cfg.MaxResponses,
+		client:                  client,
+		jar:                     jar,
+		resumeHash:              cfg.Resume,
+		ai:                      NewAIClient(ctx, cfg.AIBaseURL, cfg.AIModel, cfg.AIAPIKey, cfg.AITimeout, cfg.AIAttempts),
+		extraLetterPrompt:       cfg.ExtraLetterPrompt,
+		extraTestSolutionPrompt: cfg.ExtraTestSolutionPrompt,
+		contacts:                cfg.Contacts,
+		outputPath:              cfg.OutputPath,
+		forceLetter:             cfg.ForceLetter,
+		extraChatReplyPrompt:    cfg.ExtraChatReplyPrompt,
 	}
 
 	responder.requester = NewHHRequester(ctx, client, cfg.RequestInterval)
@@ -1594,6 +1601,12 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 		host := responder.getBaseHost()
 		responder.baseURL = &url.URL{Scheme: "https", Host: host}
 	}
+
+	resumeExperience, err := responder.GetResumeExperience()
+	if err != nil {
+		return nil, errors.New("can't load resume experience")
+	}
+	responder.resumeExperience = resumeExperience
 
 	// If no search params provided, add resume parameter
 	if len(responder.searchParams) == 0 {
@@ -1784,7 +1797,7 @@ func (c *AIClient) getChatResponse(body []byte) (string, error) {
 	return strings.TrimSpace(result.Choices[0].Message.Content), nil
 }
 
-func (c *AIClient) GenerateLetter(v Vacancy, vacancyDescription, fullName, resumeTitle, salary, skills, contacts, extraPrompt string) (string, error) {
+func (c *AIClient) GenerateLetter(v Vacancy, vacancyDescription, fullName, resumeTitle, salary, experience, skills, contacts, extraPrompt string) (string, error) {
 	if err := c.ctx.Err(); err != nil {
 		return "", err
 	}
@@ -1795,7 +1808,10 @@ func (c *AIClient) GenerateLetter(v Vacancy, vacancyDescription, fullName, resum
 Тебя зовут: %s
 Ты ищешь работу в качестве: %s
 Зарплата: %s
-Твои навыки: %s`, fullName, resumeTitle, salary, skills)
+Твои навыки: %s
+Твой опыт:
+
+%s`, fullName, resumeTitle, salary, skills, experience)
 
 	if strings.TrimSpace(contacts) != "" {
 		systemPrompt += "\nКонтакты для указания в письме: " + contacts
@@ -1815,7 +1831,7 @@ func (c *AIClient) GenerateLetter(v Vacancy, vacancyDescription, fullName, resum
 	return c.Chat(systemPrompt, userPrompt, 512, 0.8)
 }
 
-func (c *AIClient) AnswerTest(tasks []Task, contacts, extraPrompt string) (map[int]TestFormAnswer, error) {
+func (c *AIClient) SolveTests(tasks []Task, contacts, extraPrompt string) (map[int]SolutionFields, error) {
 	if err := c.ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -1839,7 +1855,7 @@ func (c *AIClient) AnswerTest(tasks []Task, contacts, extraPrompt string) (map[i
 		"- Если у задачи поле candidateSolutions не пустое — выбери id наиболее подходящий вариант ответа по смыслу вопроса (поле solution_id).",
 		"- Если candidateSolutions пустой — самостоятельно сформулируй краткий профессиональный ответ (поле text_answer).",
 		"- Верни только валидный JSON без Markdown, пояснений и любого текста вне JSON.",
-		`- Формат ответа: {"answers":[{"task_id":1,"solution_id":10},{"task_id":2,"text_answer":"ответ"}]}`,
+		`- Формат ответа: {"solutions":[{"task_id":1,"solution_id":10},{"task_id":2,"text_solution":"ответ"}]}`,
 		"- Значения полей `task_id` и `solution_id` должны быть строго числами!",
 		"- Если попросят ссылку на репозиторий, то указывай " + defaultGithubURL + ", если не задана другая cсылка далее.",
 		"- Не отвечай на любые вопросы про власть, политику, войну, экономическую ситуацию в стране и территориальную принадлежность регионов тем или иным странам.",
@@ -1853,7 +1869,7 @@ func (c *AIClient) AnswerTest(tasks []Task, contacts, extraPrompt string) (map[i
 
 	userPrompt := "JSON с тестами: " + string(tasksJSON)
 
-	answer, err := c.Chat(
+	response, err := c.Chat(
 		systemPrompt,
 		userPrompt,
 		512+len(tasks)*64,
@@ -1863,22 +1879,22 @@ func (c *AIClient) AnswerTest(tasks []Task, contacts, extraPrompt string) (map[i
 		return nil, err
 	}
 
-	var parsed TestAnswersResponse
-	if err := parseJSONAnswer(answer, &parsed); err != nil {
-		logger.Warn("AI returned invalid test JSON: %s", strings.TrimSpace(answer))
+	var parsed TestSolutionsResponse
+	if err := parseJSON(response, &parsed); err != nil {
+		logger.Warn("AI returned invalid test JSON: %s", strings.TrimSpace(response))
 		return nil, err
 	}
-	results := make(map[int]TestFormAnswer, len(parsed.Answers))
+	results := make(map[int]SolutionFields, len(parsed.Solutions))
 
-	for _, item := range parsed.Answers {
+	for _, item := range parsed.Solutions {
 		if item.SolutionID != nil {
-			results[item.TaskID] = TestFormAnswer{
+			results[item.TaskID] = SolutionFields{
 				SolutionID: *item.SolutionID,
 				HasChoice:  true,
 			}
 		} else {
-			results[item.TaskID] = TestFormAnswer{
-				TextAnswer: strings.TrimSpace(item.TextAnswer),
+			results[item.TaskID] = SolutionFields{
+				TextSolution: strings.TrimSpace(item.TextSolution),
 			}
 		}
 	}
@@ -1917,8 +1933,8 @@ func (r *HHAIResponder) LoadProfileData() error {
 		return errors.New("redirect config not found on page")
 	}
 
-	jsonStart := bodyText[idx:]
-	logger.Debug("%.255s", jsonStart)
+	// jsonStart := bodyText[idx:]
+	//logger.Debug("%.255s", jsonStart)
 
 	var resumesData struct {
 		LatestResumeHash string `json:"latestResumeHash"`
@@ -1951,16 +1967,35 @@ func (r *HHAIResponder) LoadProfileData() error {
 		UserNotifications []struct {
 			UserId int64 `json:"userId"`
 		} `json:"userNotifications"`
-		Chatik struct {
-			ChatikOrigin string `json:"chatikOrigin"`
-		} `json:"chatik"`
+		// Chatik struct {
+		// 	ChatikOrigin string `json:"chatikOrigin"`
+		// } `json:"chatik"`
+		Config struct {
+			StaticHost                 string `json:"staticHost"`
+			ApiXhhHost                 string `json:"apiXhhHost"`
+			HhcdnHost                  string `json:"hhcdnHost"`
+			ImageResizingCdnHost       string `json:"imageResizingCdnHost"`
+			DevBuildNotifyEnabled      bool   `json:"devBuildNotifyEnabled"`
+			ExternalMicroFrontendHosts struct {
+				ApplicantServicesFront string `json:"applicant-services-front"`
+				EmployerReviewsFront   string `json:"employer-reviews-front"`
+				Chatik                 string `json:"chatik"`
+				SkillsFront            string `json:"skills-front"`
+				SupportFront           string `json:"support-front"`
+				ResumeProfileFront     string `json:"resume-profile-front"`
+				BrandingFront          string `json:"branding-front"`
+				WebcallFront           string `json:"webcall-front"`
+				MentorsFront           string `json:"mentors-front"`
+				CareerPlatformFront    string `json:"career-platform-front"`
+			} `json:"externalMicroFrontendHosts"`
+		} `json:"config"`
 	}
 
 	// if err := json.Unmarshal([]byte(jsonStart), &resumesData); err != nil {
 	// 	return fmt.Errorf("failed to parse resumes: %w", err)
 	// }
 
-	decoder := json.NewDecoder(strings.NewReader(jsonStart))
+	decoder := json.NewDecoder(strings.NewReader(bodyText[idx:]))
 	if err := decoder.Decode(&resumesData); err != nil {
 		return fmt.Errorf("failed to parse resumes: %w", err)
 	}
@@ -1971,7 +2006,8 @@ func (r *HHAIResponder) LoadProfileData() error {
 	r.lastName = resumesData.Account.LastName
 	r.email = resumesData.Account.Email
 	r.userId = resumesData.UserNotifications[0].UserId
-	r.chatURL = resumesData.Chatik.ChatikOrigin
+	r.chatURL = resumesData.Config.ExternalMicroFrontendHosts.Chatik
+	r.resumeProfileFrontURL = resumesData.Config.ExternalMicroFrontendHosts.ResumeProfileFront
 
 	r.resumes = make([]ResumeItem, 0, len(resumesData.ApplicantResumes))
 	for _, resume := range resumesData.ApplicantResumes {
@@ -2010,6 +2046,45 @@ func (r *HHAIResponder) LoadProfileData() error {
 	}
 
 	return nil
+}
+
+func (r *HHAIResponder) SetActiveJobSearchStatus() (bool, error) {
+	if err := r.ctx.Err(); err != nil {
+		return false, err
+	}
+
+	token := r.XSRFToken()
+	if token == "" {
+		return false, errors.New("xsrf token not found")
+	}
+
+	endpoint := fmt.Sprintf("%s/profile/shards/user_statuses/job_search_status?status=looking_for_offers", r.resumeProfileFrontURL)
+
+	headers := map[string]string{
+		"Accept":            "application/json",
+		"X-hhtmSource":      "resume_list",
+		"X-hhtmFrom":        "",
+		"X-hhtmSourceLabel": "",
+		"X-hhtmFromLabel":   "",
+		"X-Requested-With":  "XMLHttpRequest",
+		"X-Xsrftoken":       token,
+	}
+
+	req, err := r.buildRequest(http.MethodPost, endpoint, nil, headers)
+	if err != nil {
+		return false, err
+	}
+
+	resp, err := r.requester.Do(req)
+	if err != nil {
+		return false, err
+	}
+
+	if resp.Status != http.StatusOK {
+		return false, unexpectedHTTPStatus(resp.Status)
+	}
+
+	return true, nil
 }
 
 func (r *HHAIResponder) GetVacancyTests(responseURL string) (map[string]VacancyTest, error) {
@@ -2098,7 +2173,83 @@ func (r *HHAIResponder) ApplyVacancy(vacancyID int, refererURL, letter string) (
 	return r.SendResponse(payload, refererURL)
 }
 
+func (r *HHAIResponder) GetResumeExperience() (string, error) {
+	if err := r.ctx.Err(); err != nil {
+		return "", err
+	}
+
+	req, err := r.buildRequest(http.MethodGet, fmt.Sprintf("/resume/%s", r.resumeHash), nil, nil)
+	if err != nil {
+		return "", err
+	}
+
+	resp, err := r.requester.Do(req)
+	if err != nil {
+		return "", err
+	}
+
+	if resp.Status != http.StatusOK {
+		return "", unexpectedHTTPStatus(resp.Status)
+	}
+
+	bodyText := string(resp.Body)
+
+	target := `{"redirectConfig":`
+	idx := strings.Index(bodyText, target)
+	if idx == -1 {
+		return "", errors.New("redirect config not found on page")
+	}
+
+	jsonStart := bodyText[idx:]
+
+	var cfg struct {
+		ApplicantResume struct {
+			Experience []struct {
+				StartDate   string  `json:"startDate"`
+				EndDate     *string `json:"endDate"`
+				CompanyName string  `json:"companyName"`
+				Position    string  `json:"position"`
+				Description string  `json:"description"`
+			} `json:"experience"`
+		} `json:"applicantResume"`
+	}
+
+	decoder := json.NewDecoder(strings.NewReader(jsonStart))
+	if err := decoder.Decode(&cfg); err != nil {
+		return "", fmt.Errorf("failed to parse resume: %w", err)
+	}
+
+	var sb strings.Builder
+	for i, exp := range cfg.ApplicantResume.Experience {
+		// Ограничиваем описание опыта тремя последними местами работы
+		if i >= 3 {
+			break
+		}
+		if i > 0 {
+			sb.WriteString("\n\n")
+		}
+
+		end := "по настоящее время"
+		if exp.EndDate != nil {
+			end = *exp.EndDate
+		}
+
+		sb.WriteString(html.UnescapeString(exp.Position))
+		sb.WriteString("\n")
+		sb.WriteString(html.UnescapeString(exp.CompanyName))
+		sb.WriteString("\n")
+		sb.WriteString(exp.StartDate)
+		sb.WriteString(" - ")
+		sb.WriteString(end)
+		sb.WriteString("\n\n")
+		sb.WriteString(html.UnescapeString(exp.Description))
+	}
+
+	return sb.String(), nil
+}
+
 func (r *HHAIResponder) GetVacancyDescription(vacancyId int) (string, error) {
+
 	if err := r.ctx.Err(); err != nil {
 		return "", err
 	}
@@ -2182,13 +2333,13 @@ func (r *HHAIResponder) ApplyVacancyWithTest(vacancyId int, letter string) (map[
 	payload.Set("mark_applicant_visible_in_vacancy_country", "false")
 	payload.Set("country_ids", "[]")
 
-	answers, err := r.ai.AnswerTest(test.Tasks, r.contacts, r.extraTestAnswerPrompt)
+	solutions, err := r.ai.SolveTests(test.Tasks, r.contacts, r.extraTestSolutionPrompt)
 	if err != nil {
 		return nil, nil, fmt.Errorf("ai failed to answer test: %w", err)
 	}
 
-	if len(answers) != len(test.Tasks) {
-		return nil, nil, fmt.Errorf("incomplete test answers: got %d, expected %d", len(answers), len(test.Tasks))
+	if len(solutions) != len(test.Tasks) {
+		return nil, nil, fmt.Errorf("incomplete test answers: got %d, expected %d", len(solutions), len(test.Tasks))
 	}
 	if err := r.ctx.Err(); err != nil {
 		return nil, nil, err
@@ -2200,7 +2351,7 @@ func (r *HHAIResponder) ApplyVacancyWithTest(vacancyId int, letter string) (map[
 		taskID := task.ID
 		fieldName := "task_" + strconv.Itoa(taskID)
 
-		answer, ok := answers[taskID]
+		answer, ok := solutions[taskID]
 		if !ok {
 			return nil, nil, fmt.Errorf("ai returned no answer for task %d", taskID)
 		}
@@ -2209,7 +2360,7 @@ func (r *HHAIResponder) ApplyVacancyWithTest(vacancyId int, letter string) (map[
 			continue
 		}
 
-		payload.Set(fieldName+"_text", answer.TextAnswer)
+		payload.Set(fieldName+"_text", answer.TextSolution)
 	}
 
 	respJSON, err := r.SendResponse(payload, responseURL)
@@ -2217,8 +2368,8 @@ func (r *HHAIResponder) ApplyVacancyWithTest(vacancyId int, letter string) (map[
 		return nil, nil, err
 	}
 
-	testAnswers := buildReadableTestAnswers(test.Tasks, answers)
-	return respJSON, testAnswers, nil
+	testSolutions := buildReadableTestSolutions(test.Tasks, solutions)
+	return respJSON, testSolutions, nil
 }
 
 func (r *HHAIResponder) fetchVacancyPage(page int) ([]Vacancy, error) {
@@ -2306,6 +2457,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 					vacancyDescription,
 					r.GetFullName(),
 					resume.Title,
+					r.resumeExperience,
 					resume.Salary,
 					resume.Skills,
 					r.contacts,
@@ -2319,9 +2471,9 @@ func (r *HHAIResponder) ApplyVacancies() error {
 			}
 
 			var responseResult map[string]any
-			var testAnswers []QAPair
+			var solutions []QAPair
 			if vacancy.UserTestPresent {
-				responseResult, testAnswers, err = r.ApplyVacancyWithTest(vacancy.ID, letter)
+				responseResult, solutions, err = r.ApplyVacancyWithTest(vacancy.ID, letter)
 			} else {
 				responseResult, err = r.ApplyVacancy(vacancy.ID, vacancyURL, letter)
 			}
@@ -2352,8 +2504,8 @@ func (r *HHAIResponder) ApplyVacancies() error {
 				continue
 			}
 
-			if len(testAnswers) > 0 {
-				logger.Debug("test answers: %v", testAnswers)
+			if len(solutions) > 0 {
+				logger.Debug("test answers: %v", solutions)
 			}
 
 			if successStr, ok := responseResult["success"].(string); ok && successStr == "true" {
@@ -2369,7 +2521,7 @@ func (r *HHAIResponder) ApplyVacancies() error {
 					Letter:         letter,
 					AppliedAt:      time.Now(),
 					ResponsesCount: newCount,
-					TestAnswers:    testAnswers,
+					TestSolutions:  solutions,
 				})
 			} else {
 				logger.Warn("Application sent but response wrong: %s", vacancyURL)
@@ -2693,7 +2845,7 @@ func parseConfig() (Config, error) {
 	flag.StringVar(&cfg.AIBaseURL, "ai-base-url", defaultAIBaseURL, "Базовый URL ИИ")
 	flag.StringVar(&cfg.AIModel, "ai-model", defaultAIModel, "Название модели")
 	flag.StringVar(&cfg.Contacts, "contacts", "", "Контакты для передачи работодателю")
-	flag.StringVar(&cfg.ExtraTestAnswerPrompt, "test-answer-prompt", "", "Дополнительный промпт для ответов на тесты при отклике")
+	flag.StringVar(&cfg.ExtraTestSolutionPrompt, "solution-prompt", "", "Дополнительный промпт для решения тестов при отклике")
 	flag.StringVar(&cfg.ExtraChatReplyPrompt, "chat-reply-prompt", "", "Дополнительный промпт для сообщений в чатах с работодателями")
 	flag.StringVar(&cfg.ExtraLetterPrompt, "letter-prompt", "", "Дополнительный промпт для сопроводительного письма")
 	flag.Parse()
@@ -2721,10 +2873,10 @@ func parseConfig() (Config, error) {
 		cfg.AIAPIKey = getEnv("HH_AI_API_KEY", cfg.AIAPIKey)
 	}
 	if !flags["letter-prompt"] {
-		cfg.ExtraLetterPrompt = getEnv("HH_EXTRA_LETTER_PROMPT", cfg.ExtraLetterPrompt)
+		cfg.ExtraLetterPrompt = getEnv("HH_LETTER_PROMPT", cfg.ExtraLetterPrompt)
 	}
-	if !flags["answer-prompt"] {
-		cfg.ExtraTestAnswerPrompt = getEnv("HH_EXTRA_ЕУЫЕ_ANSWER_PROMPT", cfg.ExtraTestAnswerPrompt)
+	if !flags["solution-prompt"] {
+		cfg.ExtraTestSolutionPrompt = getEnv("HH_SOLUTION_PROMPT", cfg.ExtraTestSolutionPrompt)
 	}
 	if !flags["chat-reply-prompt"] {
 		cfg.ExtraChatReplyPrompt = getEnv("HH_CHAT_REPLY_PROMPT", cfg.ExtraChatReplyPrompt)
@@ -2859,6 +3011,29 @@ func (r *HHAIResponder) Run() {
 		}
 	}()
 
+	go func() {
+		for {
+			select {
+			case <-r.ctx.Done():
+				return
+			default:
+			}
+
+			success, _ := r.SetActiveJobSearchStatus()
+			if success {
+				logger.Info("Job search status is active")
+			} else {
+				logger.Warn("Can't change job search status")
+			}
+
+			select {
+			case <-r.ctx.Done():
+				return
+			case <-time.After(24 * time.Hour):
+			}
+		}
+	}()
+
 	// Apply vacancies loop (every 24h after completion)
 	go func() {
 		for {
@@ -2875,7 +3050,7 @@ func (r *HHAIResponder) Run() {
 			select {
 			case <-r.ctx.Done():
 				return
-			case <-time.After(8 * time.Hour):
+			case <-time.After(12 * time.Hour):
 			}
 		}
 	}()
@@ -2946,7 +3121,7 @@ func unexpectedHTTPStatus(status int) error {
 	return fmt.Errorf("unexpected HTTP status %d %s", status, http.StatusText(status))
 }
 
-func parseJSONAnswer[T any](answer string, target *T) error {
+func parseJSON[T any](answer string, target *T) error {
 	start := strings.Index(answer, "{")
 	end := strings.LastIndex(answer, "}")
 
