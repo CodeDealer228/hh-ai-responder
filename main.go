@@ -43,6 +43,7 @@ const (
 	defaultRequestInterval = 1200 * time.Millisecond
 	defaultWorkers         = 2
 	letterTemplatePath     = "letter_template.txt"
+	testWishesPath         = "test_wishes.txt"
 	secCHUAHeader          = `"Chromium";v="149", "Google Chrome";v="149", "Not-A.Brand";v="99"`
 	userAgent              = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
 )
@@ -1258,6 +1259,7 @@ type HHAIResponder struct {
 	resumeProfileFrontURL   string
 	ignoredChats            []int64
 	questions               []string
+	testWishes              string
 
 	eventWriter io.Writer
 	eventMu     sync.Mutex
@@ -1496,6 +1498,7 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 	responder.eventWriter = out
 	responder.searchParams = searchParams
 	responder.questions = loadQuestions("questions.txt")
+	responder.testWishes = loadTextFile(testWishesPath)
 
 	if err := responder.LoadProfileData(); err != nil {
 		return nil, err
@@ -1582,9 +1585,8 @@ func (r *HHAIResponder) RefreshResumeData() error {
 	return nil
 }
 
-// loadQuestions reads newline-delimited filler messages used as a safe fallback in
-// AutoRespondChats when the AI reply is unusable (empty, failed, or a leaked
-// internal/moderation artifact). Missing file just means no fallback is available.
+// loadQuestions reads newline-delimited filler messages sent to employer chats by
+// AutoRespondChats. Missing file just means the chat filler feature has nothing to send.
 func loadQuestions(path string) []string {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -1600,6 +1602,15 @@ func loadQuestions(path string) []string {
 		questions = append(questions, line)
 	}
 	return questions
+}
+
+// loadTextFile reads a whole file and trims it, returning "" if it doesn't exist.
+func loadTextFile(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
 }
 
 // randomQuestion returns a random filler message, or "" if none are loaded.
@@ -2447,7 +2458,15 @@ func (r *HHAIResponder) ApplyVacancyWithTest(vacancyId int, letter string) (map[
 	payload.Set("mark_applicant_visible_in_vacancy_country", "false")
 	payload.Set("country_ids", "[]")
 
-	solutions, err := r.ai.SolveTests(test.Tasks, r.contacts, r.extraTestSolutionPrompt)
+	extraPrompt := strings.TrimSpace(r.extraTestSolutionPrompt)
+	if r.testWishes != "" {
+		if extraPrompt != "" {
+			extraPrompt += "\n\n"
+		}
+		extraPrompt += r.testWishes
+	}
+
+	solutions, err := r.ai.SolveTests(test.Tasks, r.contacts, extraPrompt)
 	if err != nil {
 		return nil, nil, fmt.Errorf("ai failed to answer test: %w", err)
 	}
