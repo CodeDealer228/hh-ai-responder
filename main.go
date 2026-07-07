@@ -12,6 +12,7 @@ import (
 	"html"
 	"io"
 	"log"
+	mathrand "math/rand"
 	"mime/multipart"
 	"net/http"
 	"net/url"
@@ -58,6 +59,12 @@ var (
 	logger                  *Logger
 	latesteResumeHashRegexp = regexp.MustCompile(`"latestResumeHash":"([a-f0-9]{30,})"`)
 	userIdRegexp            = regexp.MustCompile(`"userId":(\d+)`)
+	// moderationArtifactRegexp catches AI responses that are safety-classifier verdicts
+	// leaking through instead of an actual reply (seen with some free OpenRouter models).
+	moderationArtifactRegexp = regexp.MustCompile(`(?i)\buser safety\s*:|\bsafety categories?\s*:`)
+	// letterArtifactRegexp catches leaked reasoning/planning text from "thinking" models
+	// that sometimes write out their scratch work instead of just the final letter.
+	letterArtifactRegexp = regexp.MustCompile(`(?i)\bwe need to\b|\blet'?s craft\b|\bsentence \d+\s*:|\blet me\b|\bi need to\b`)
 )
 
 type Config struct {
@@ -1236,8 +1243,22 @@ func (r *HHAIResponder) AutoRespondChats() error {
 		}
 
 		reply, err := r.ai.Chat(systemPrompt, userPrompt, 512, temperature)
-		if err != nil || strings.TrimSpace(reply) == "" {
-			continue
+		badReply := err != nil || strings.TrimSpace(reply) == "" || moderationArtifactRegexp.MatchString(reply)
+
+		if badReply {
+			// Reply options come from a structured recruiter-bot form and must match
+			// one of the given option strings exactly, so a filler question doesn't fit.
+			if len(chatToReply.ReplyOptions) > 0 {
+				continue
+			}
+
+			fallback := r.randomQuestion()
+			if fallback == "" {
+				continue
+			}
+
+			logger.Warn("AI reply for chat #%d was empty/failed/unusable, falling back to a random filler message", chatToReply.ChatId)
+			reply = fallback
 		}
 
 		logger.Debug("Reply to chat #%d:\n%s\n%s", chatToReply.ChatId, chatToReply.ReplyToMessage, reply)
@@ -1340,6 +1361,7 @@ type HHAIResponder struct {
 	chatURL                 string
 	resumeProfileFrontURL   string
 	ignoredChats            []int64
+	questions               []string
 
 	eventWriter io.Writer
 	eventMu     sync.Mutex
@@ -1577,6 +1599,7 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 
 	responder.eventWriter = out
 	responder.searchParams = searchParams
+	responder.questions = loadQuestions("questions.txt")
 
 	if err := responder.LoadProfileData(); err != nil {
 		return nil, err
@@ -1589,6 +1612,15 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 	}
 
 	resume := responder.GetCurrentResume()
+
+	if resume == nil && responder.resumeHash != "" {
+		if fallback, err := responder.FetchResumeSummary(responder.resumeHash); err == nil {
+			responder.resumes = append(responder.resumes, *fallback)
+			resume = responder.GetCurrentResume()
+		} else {
+			logger.Warn("Fallback resume fetch failed: %v", err)
+		}
+	}
 
 	if resume == nil {
 		return nil, errors.New("resume not found")
@@ -1615,6 +1647,71 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 	}
 
 	return responder, nil
+}
+
+// RefreshResumeData reloads title/skills/salary/experience for the active resume from
+// hh.ru. Without this, resume edits made on the site are never picked up: this data is
+// otherwise only fetched once in NewHHAIResponder and then cached in memory for the
+// entire lifetime of the process (which can run for days under docker-compose).
+func (r *HHAIResponder) RefreshResumeData() error {
+	if err := r.LoadProfileData(); err != nil {
+		return err
+	}
+
+	if r.resumeHash == "" {
+		r.resumeHash = r.latestResumeHash
+	}
+
+	resume := r.GetCurrentResume()
+
+	if resume == nil && r.resumeHash != "" {
+		if fallback, err := r.FetchResumeSummary(r.resumeHash); err == nil {
+			r.resumes = append(r.resumes, *fallback)
+			resume = r.GetCurrentResume()
+		} else {
+			logger.Warn("Fallback resume fetch failed: %v", err)
+		}
+	}
+
+	if resume == nil {
+		return errors.New("resume not found")
+	}
+
+	resumeExperience, err := r.GetResumeExperience()
+	if err != nil {
+		return errors.New("can't load resume experience")
+	}
+	r.resumeExperience = resumeExperience
+
+	return nil
+}
+
+// loadQuestions reads newline-delimited filler messages used as a safe fallback in
+// AutoRespondChats when the AI reply is unusable (empty, failed, or a leaked
+// internal/moderation artifact). Missing file just means no fallback is available.
+func loadQuestions(path string) []string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+
+	var questions []string
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		questions = append(questions, line)
+	}
+	return questions
+}
+
+// randomQuestion returns a random filler message, or "" if none are loaded.
+func (r *HHAIResponder) randomQuestion() string {
+	if len(r.questions) == 0 {
+		return ""
+	}
+	return r.questions[mathrand.Intn(len(r.questions))]
 }
 
 func (r *HHAIResponder) writeEvent(v any) {
@@ -1801,17 +1898,28 @@ func (c *AIClient) GenerateLetter(v Vacancy, vacancyDescription, fullName, resum
 	if err := c.ctx.Err(); err != nil {
 		return "", err
 	}
-	systemPrompt := fmt.Sprintf(`Ты должен сгенерировать сопроводительное письмо для отклика на вакансию от имени соискателя.
+	const instructions = `Ты должен сгенерировать сопроводительное письмо для отклика на вакансию от имени соискателя.
 В нем ты должен написать почему эта вакансия идеально подходит тебе.
 Утверждай, что обладаешь всеми необходимыми навыками в требованиях к вакансии.
+Опирайся на конкретные проекты и формулировки из раздела "Твой опыт" ниже, а не на общие фразы.
+Не более 4 предложений.
 Не используй в нем markdown, списки и пояснения.
-Тебя зовут: %s
-Ты ищешь работу в качестве: %s
-Зарплата: %s
-Твои навыки: %s
-Твой опыт:
+Пиши только на русском языке, без вкраплений других языков или иероглифов.
+Отвечай только готовым текстом письма, без рассуждений и пояснений о том, как ты его составлял.
 
-%s`, fullName, resumeTitle, salary, skills, experience)
+Пример 1 (для вакансии Python-разработчика):
+Меня зовут Иван Петров, почти два года я работал бэкенд-разработчиком на Python и уверен, что закрою ваши задачи по FastAPI и PostgreSQL. В ООО «Ромашка» я спроектировал и внедрил REST API для обработки более 10 000 запросов в сутки, сократив время отклика почти вдвое. Также настраивал CI/CD на GitLab и работал с Docker в продакшене. Буду рад обсудить детали на созвоне.
+
+Пример 2 (для вакансии аналитика данных):
+Меня зовут Анна Смирнова, за три года в аналитике я построила более 20 дашбордов в Tableau и автоматизировала еженедельную отчётность на Python и SQL. В «Технопром» мой ETL-пайплайн сократил время подготовки отчётов с двух дней до трёх часов. Уверена, что мой опыт работы с большими данными полностью соответствует вашим требованиям.`
+
+	// Built via concatenation, not Sprintf, so that "%" in resume text (percentages,
+	// metrics) can never be misparsed as a format verb and shift the arguments.
+	systemPrompt := instructions + "\n\nТебя зовут: " + fullName +
+		"\nТы ищешь работу в качестве: " + resumeTitle +
+		"\nЗарплата: " + salary +
+		"\nТвои навыки: " + skills +
+		"\nТвой опыт:\n\n" + experience
 
 	if strings.TrimSpace(contacts) != "" {
 		systemPrompt += "\nКонтакты для указания в письме: " + contacts
@@ -1828,7 +1936,15 @@ func (c *AIClient) GenerateLetter(v Vacancy, vacancyDescription, fullName, resum
 		vacancyDescription,
 	)
 
-	return c.Chat(systemPrompt, userPrompt, 512, 0.8)
+	letter, err := c.Chat(systemPrompt, userPrompt, 300, 0.2)
+	if err != nil {
+		return "", err
+	}
+	if letterArtifactRegexp.MatchString(letter) {
+		return "", fmt.Errorf("ai response looks like a leaked reasoning draft, not a letter: %q", letter)
+	}
+
+	return letter, nil
 }
 
 func (c *AIClient) SolveTests(tasks []Task, contacts, extraPrompt string) (map[int]SolutionFields, error) {
@@ -2248,6 +2364,90 @@ func (r *HHAIResponder) GetResumeExperience() (string, error) {
 	return sb.String(), nil
 }
 
+// FetchResumeSummary loads title/salary/keySkills for a single resume directly from its
+// own page. Used as a fallback when /applicant/resumes doesn't expose applicantResumes
+// (hh.ru redirects accounts with a single resume to /applicant/profile/me instead, which
+// doesn't embed the resume list).
+func (r *HHAIResponder) FetchResumeSummary(hash string) (*ResumeItem, error) {
+	if err := r.ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	req, err := r.buildRequest(http.MethodGet, fmt.Sprintf("/resume/%s", hash), nil, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := r.requester.Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.Status != http.StatusOK {
+		return nil, unexpectedHTTPStatus(resp.Status)
+	}
+
+	bodyText := string(resp.Body)
+
+	target := `{"redirectConfig":`
+	idx := strings.Index(bodyText, target)
+	if idx == -1 {
+		return nil, errors.New("redirect config not found on resume page")
+	}
+
+	var cfg struct {
+		ApplicantResume struct {
+			Attributes struct {
+				Id string `json:"id"`
+			} `json:"_attributes"`
+			Title []struct {
+				String string `json:"string"`
+			} `json:"title"`
+			// Salary is "[]" when unset and an object when set, hence RawMessage.
+			Salary    json.RawMessage `json:"salary"`
+			KeySkills []struct {
+				String string `json:"string"`
+			} `json:"keySkills"`
+		} `json:"applicantResume"`
+	}
+
+	decoder := json.NewDecoder(strings.NewReader(bodyText[idx:]))
+	if err := decoder.Decode(&cfg); err != nil {
+		return nil, fmt.Errorf("failed to parse resume: %w", err)
+	}
+
+	id, _ := strconv.ParseInt(cfg.ApplicantResume.Attributes.Id, 10, 64)
+
+	var title string
+	if len(cfg.ApplicantResume.Title) > 0 {
+		title = cfg.ApplicantResume.Title[0].String
+	}
+
+	var skills []string
+	for _, s := range cfg.ApplicantResume.KeySkills {
+		skills = append(skills, s.String)
+	}
+
+	var salary string
+	if len(cfg.ApplicantResume.Salary) > 0 && cfg.ApplicantResume.Salary[0] == '{' {
+		var salaryObj struct {
+			Amount   int    `json:"amount"`
+			Currency string `json:"currency"`
+		}
+		if err := json.Unmarshal(cfg.ApplicantResume.Salary, &salaryObj); err == nil && salaryObj.Currency != "" {
+			salary = strings.Replace(fmt.Sprintf("%d %s", salaryObj.Amount, salaryObj.Currency), "RUR", "руб", 1)
+		}
+	}
+
+	return &ResumeItem{
+		Id:     id,
+		Hash:   hash,
+		Title:  html.UnescapeString(title),
+		Skills: strings.Join(skills, ", "),
+		Salary: salary,
+	}, nil
+}
+
 func (r *HHAIResponder) GetVacancyDescription(vacancyId int) (string, error) {
 
 	if err := r.ctx.Err(); err != nil {
@@ -2457,8 +2657,8 @@ func (r *HHAIResponder) ApplyVacancies() error {
 					vacancyDescription,
 					r.GetFullName(),
 					resume.Title,
-					r.resumeExperience,
 					resume.Salary,
+					r.resumeExperience,
 					resume.Skills,
 					r.contacts,
 					r.extraLetterPrompt,
@@ -3041,6 +3241,10 @@ func (r *HHAIResponder) Run() {
 			case <-r.ctx.Done():
 				return
 			default:
+			}
+
+			if err := r.RefreshResumeData(); err != nil {
+				logger.Error("Refresh resume data error: %v", err)
 			}
 
 			if err := r.ApplyVacancies(); err != nil {
