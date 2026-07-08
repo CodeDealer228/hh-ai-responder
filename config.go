@@ -1,0 +1,229 @@
+package main
+
+import (
+	"bufio"
+	"errors"
+	"flag"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+)
+
+const (
+	defaultAIAttempts      = 2
+	defaultAITimeout       = 45 * time.Second
+	defaultRequestInterval = 1200 * time.Millisecond
+	defaultWorkers         = 2
+
+	defaultOllamaBaseURL     = "http://localhost:11434"
+	defaultOllamaModel       = "llama3:8b"
+	defaultOpenRouterBaseURL = "https://openrouter.ai/api"
+	defaultOpenRouterModel   = "openrouter/free"
+)
+
+type Config struct {
+	SearchURL    string
+	CookiesPath  string
+	LogLevel     string
+	Resume       string
+	MaxResponses int
+
+	// AIProvider selects which of the two backends below is actually used: "ollama"
+	// (default, matches the project's original local-first behavior) or "openrouter".
+	AIProvider        string
+	OllamaBaseURL     string
+	OllamaModel       string
+	OllamaAPIKey      string
+	OpenRouterBaseURL string
+	OpenRouterModel   string
+	OpenRouterAPIKey  string
+
+	AITimeout               time.Duration
+	AIAttempts              int
+	ExtraLetterPrompt       string
+	ExtraTestSolutionPrompt string
+	RequestInterval         time.Duration
+	OutputPath              string
+	Contacts                string
+	ListResumes             bool
+	ForceLetter             bool
+	ExtraChatReplyPrompt    string
+	DebugSolveTests         bool
+}
+
+// ActiveAI resolves which base URL/model/API key to use based on AIProvider.
+// Unknown or empty AIProvider falls back to Ollama, matching the pre-routing default.
+func (cfg Config) ActiveAI() (baseURL, model, apiKey string) {
+	switch strings.ToLower(strings.TrimSpace(cfg.AIProvider)) {
+	case "openrouter":
+		return cfg.OpenRouterBaseURL, cfg.OpenRouterModel, cfg.OpenRouterAPIKey
+	default:
+		return cfg.OllamaBaseURL, cfg.OllamaModel, cfg.OllamaAPIKey
+	}
+}
+
+func parseConfig() (Config, error) {
+	wd, err := os.Getwd()
+	if err != nil {
+		wd = "."
+	}
+
+	cfg := Config{}
+
+	flag.StringVar(&cfg.SearchURL, "u", "", "URL для поиска вакансий")
+	flag.StringVar(&cfg.CookiesPath, "c", filepath.Join(wd, "cookies.txt"), "Путь к файлу cookies")
+	flag.StringVar(&cfg.LogLevel, "l", "info", "Уровень логирования: debug, info, warn, error")
+	flag.StringVar(&cfg.Resume, "r", "", "ID резюме (если не указан — используется последнее)")
+	flag.StringVar(&cfg.OutputPath, "o", "", "Файл для вывода результатов (по умолчанию — в STDOUT)")
+	flag.IntVar(&cfg.MaxResponses, "mr", 0, "Пропускать вакансии с количеством откликов больше N")
+	flag.BoolVar(&cfg.ListResumes, "R", false, "Показать список резюме и выйти")
+	flag.BoolVar(&cfg.ForceLetter, "force-letter", false, "Всегда генерировать сопроводительное письмо")
+	flag.DurationVar(&cfg.AITimeout, "ai-timeout", defaultAITimeout, "Таймаут AI-запросов")
+	flag.DurationVar(&cfg.RequestInterval, "request-interval", defaultRequestInterval, "Минимальный интервал между запросами к hh.ru")
+	flag.IntVar(&cfg.AIAttempts, "ai-attempts", defaultAIAttempts, "Количество попыток отправить запрос к ИИ")
+	flag.StringVar(&cfg.AIProvider, "ai-provider", "ollama", "Провайдер ИИ: ollama или openrouter")
+	flag.StringVar(&cfg.OllamaBaseURL, "ollama-base-url", defaultOllamaBaseURL, "Базовый URL локальной Ollama")
+	flag.StringVar(&cfg.OllamaModel, "ollama-model", defaultOllamaModel, "Модель Ollama")
+	flag.StringVar(&cfg.OllamaAPIKey, "ollama-api-key", "", "API-ключ Ollama (обычно не требуется)")
+	flag.StringVar(&cfg.OpenRouterBaseURL, "openrouter-base-url", defaultOpenRouterBaseURL, "Базовый URL OpenRouter")
+	flag.StringVar(&cfg.OpenRouterModel, "openrouter-model", defaultOpenRouterModel, "Модель OpenRouter (например, openrouter/free)")
+	flag.StringVar(&cfg.OpenRouterAPIKey, "openrouter-api-key", "", "API-ключ OpenRouter")
+	flag.StringVar(&cfg.Contacts, "contacts", "", "Контакты для передачи работодателю")
+	flag.StringVar(&cfg.ExtraTestSolutionPrompt, "solution-prompt", "", "Дополнительный промпт для решения тестов при отклике")
+	flag.StringVar(&cfg.ExtraChatReplyPrompt, "chat-reply-prompt", "", "Дополнительный промпт для сообщений в чатах с работодателями")
+	flag.StringVar(&cfg.ExtraLetterPrompt, "letter-prompt", "", "Дополнительный промпт для сопроводительного письма")
+	flag.BoolVar(&cfg.DebugSolveTests, "debug-solve-tests", false, "Прогнать SolveTests на синтетическом наборе задач и выйти, не трогая hh.ru")
+	flag.Parse()
+
+	_ = loadDotEnv(".env")
+
+	flags := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) {
+		flags[f.Name] = true
+	})
+
+	if !flags["u"] {
+		cfg.SearchURL = getEnv("HH_SEARCH_URL", cfg.SearchURL)
+	}
+	if !flags["r"] {
+		cfg.Resume = getEnv("HH_RESUME", cfg.Resume)
+	}
+	if !flags["ai-provider"] {
+		cfg.AIProvider = getEnv("HH_AI_PROVIDER", cfg.AIProvider)
+	}
+	if !flags["ollama-base-url"] {
+		cfg.OllamaBaseURL = getEnv("HH_OLLAMA_BASE_URL", cfg.OllamaBaseURL)
+	}
+	if !flags["ollama-model"] {
+		cfg.OllamaModel = getEnv("HH_OLLAMA_MODEL", cfg.OllamaModel)
+	}
+	if !flags["ollama-api-key"] {
+		cfg.OllamaAPIKey = getEnv("HH_OLLAMA_API_KEY", cfg.OllamaAPIKey)
+	}
+	if !flags["openrouter-base-url"] {
+		cfg.OpenRouterBaseURL = getEnv("HH_OPENROUTER_BASE_URL", cfg.OpenRouterBaseURL)
+	}
+	if !flags["openrouter-model"] {
+		cfg.OpenRouterModel = getEnv("HH_OPENROUTER_MODEL", cfg.OpenRouterModel)
+	}
+	if !flags["openrouter-api-key"] {
+		cfg.OpenRouterAPIKey = getEnv("HH_OPENROUTER_API_KEY", cfg.OpenRouterAPIKey)
+	}
+	if !flags["letter-prompt"] {
+		cfg.ExtraLetterPrompt = getEnv("HH_LETTER_PROMPT", cfg.ExtraLetterPrompt)
+	}
+	if !flags["solution-prompt"] {
+		cfg.ExtraTestSolutionPrompt = getEnv("HH_SOLUTION_PROMPT", cfg.ExtraTestSolutionPrompt)
+	}
+	if !flags["chat-reply-prompt"] {
+		cfg.ExtraChatReplyPrompt = getEnv("HH_CHAT_REPLY_PROMPT", cfg.ExtraChatReplyPrompt)
+	}
+	if !flags["contacts"] {
+		cfg.Contacts = getEnv("HH_CONTACTS", cfg.Contacts)
+	}
+
+	if cfg.AIAttempts < 1 {
+		return Config{}, errors.New("ai-attempts must be greater than 0")
+	}
+	if cfg.RequestInterval <= 0 {
+		return Config{}, errors.New("request-interval must be greater than 0")
+	}
+
+	return cfg, nil
+}
+
+func getEnv(name, fallback string) string {
+	if value := os.Getenv(name); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func loadDotEnv(path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		if strings.HasPrefix(line, "export ") {
+			line = strings.TrimSpace(line[len("export "):])
+		}
+
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+
+		if key == "" {
+			continue
+		}
+
+		// Удаляем комментарий только вне кавычек.
+		if len(value) > 0 && value[0] != '"' && value[0] != '\'' {
+			if idx := strings.Index(value, " #"); idx >= 0 {
+				value = strings.TrimSpace(value[:idx])
+			}
+		}
+
+		if len(value) >= 2 {
+			switch value[0] {
+			case '"':
+				if value[len(value)-1] == '"' {
+					if unquoted, err := strconv.Unquote(value); err == nil {
+						value = unquoted
+					}
+				}
+
+			case '\'':
+				if value[len(value)-1] == '\'' {
+					// strconv.Unquote не умеет одинарные кавычки для строк.
+					value = value[1 : len(value)-1]
+				}
+			}
+		}
+
+		if err := os.Setenv(key, value); err != nil {
+			return err
+		}
+	}
+
+	return scanner.Err()
+}

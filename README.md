@@ -62,25 +62,33 @@ cp example.env .env
 
 Поддерживаемые переменные приложения:
 
-| Переменная             | Флаг                 | Назначение                                                             |
-| ---------------------- | -------------------- | ---------------------------------------------------------------------- |
-| `HH_SEARCH_URL`        | `-u`                 | URL для поиска вакансий.                                               |
-| `HH_AI_BASE_URL`       | `-ai-base-url`       | Базовый URL OpenAI-compatible API.                                     |
-| `HH_AI_MODEL`          | `-ai-model`          | Модель AI.                                                             |
-| `HH_AI_API_KEY`        | `-ai-api-key`        | API key для OpenAI-compatible API.                                     |
-| `HH_LETTER_PROMPT`     | `-letter-prompt`     | Дополнительные инструкции для сопроводительного письма.                |
-| `HH_SOLUTION_PROMPT`   | `-solution-prompt`   | Дополнительные инструкции для решения тестов.                          |
-| `HH_CHAT_REPLY_PROMPT` | `-chat-reply-prompt` | Дополнительные инструкции для ответов в чатах с работодателями.        |
-| `HH_CONTACTS`          | `-contacts`          | Контакты (телефон, email и т.д.), которые будут добавлены в сообщение. |
+| Переменная               | Флаг                  | Назначение                                                             |
+| ------------------------ | --------------------- | ---------------------------------------------------------------------- |
+| `HH_SEARCH_URL`          | `-u`                  | URL для поиска вакансий.                                               |
+| `HH_AI_PROVIDER`         | `-ai-provider`        | Провайдер ИИ: `ollama` (по умолчанию) или `openrouter`.                |
+| `HH_OLLAMA_BASE_URL`     | `-ollama-base-url`    | Базовый URL локальной Ollama.                                         |
+| `HH_OLLAMA_MODEL`        | `-ollama-model`       | Модель Ollama.                                                        |
+| `HH_OLLAMA_API_KEY`      | `-ollama-api-key`     | API key для Ollama (обычно не требуется).                             |
+| `HH_OPENROUTER_BASE_URL` | `-openrouter-base-url`| Базовый URL OpenRouter.                                               |
+| `HH_OPENROUTER_MODEL`    | `-openrouter-model`   | Модель OpenRouter (например, `openrouter/free`).                      |
+| `HH_OPENROUTER_API_KEY`  | `-openrouter-api-key` | API key для OpenRouter.                                               |
+| `HH_LETTER_PROMPT`       | `-letter-prompt`      | Дополнительные инструкции для сопроводительного письма.                |
+| `HH_SOLUTION_PROMPT`     | `-solution-prompt`    | Дополнительные инструкции для решения тестов.                          |
+| `HH_CHAT_REPLY_PROMPT`   | `-chat-reply-prompt`  | Дополнительные инструкции для ответов в чатах с работодателями.        |
+| `HH_CONTACTS`            | `-contacts`           | Контакты (телефон, email и т.д.), которые будут добавлены в сообщение. |
 
-Например, для Chat-GPT нужно указать сл:
+Только одна из пар (Ollama/OpenRouter) активна за раз — выбирается через `HH_AI_PROVIDER`,
+настройки второго провайдера при этом просто игнорируются, их можно оставить в `.env` про запас.
+
+Например, для OpenRouter нужно указать:
 
 `.env`
 
 ```env
-HH_AI_BASE_URL="https://api.openai.com"
-HH_AI_MODEL="gpt-4o-mini"
-HH_AI_API_KEY="ваш_api_ключ_от_openai"
+HH_AI_PROVIDER=openrouter
+HH_OPENROUTER_BASE_URL="https://openrouter.ai/api"
+HH_OPENROUTER_MODEL="openrouter/free"
+HH_OPENROUTER_API_KEY="ваш_api_ключ_от_openrouter"
 ```
 
 ## Docker
