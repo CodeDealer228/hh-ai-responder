@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const letterTemplatePath = "letter_template.txt"
+const letterTemplatePath = "content/cover_letter_template.txt"
 
 // buildReadableTestSolutions converts test tasks and AI answers to human-readable question/answer pairs
 func buildReadableTestSolutions(tasks []Task, answers map[int]SolutionFields) []QAPair {

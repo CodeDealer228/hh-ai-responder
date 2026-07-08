@@ -20,7 +20,7 @@ const (
 	defaultHost          = "hh.ru"
 	secCHUAHeader        = `"Chromium";v="149", "Google Chrome";v="149", "Not-A.Brand";v="99"`
 	userAgent            = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36"
-	testWishesPath       = "test_wishes.txt"
+	testWishesPath       = "content/hh_test_candidate_preferences.txt"
 )
 
 type HHAIResponder struct {
@@ -133,7 +133,7 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 
 	responder.eventWriter = out
 	responder.searchParams = searchParams
-	responder.questions = loadQuestions("questions.txt")
+	responder.questions = loadQuestions("content/chat_filler_messages.txt")
 	responder.testWishes = loadTextFile(testWishesPath)
 
 	if err := responder.LoadProfileData(); err != nil {

@@ -329,8 +329,9 @@ func (r *HHAIResponder) AutoRespondChats() error {
 		}
 
 		// No AI involved here by design: always a random filler line from
-		// questions.txt, never freeform generation. Keeps this feature (raises
-		// account activity by keeping chats alive) on without any AI cost/risk.
+		// content/chat_filler_messages.txt, never freeform generation. Keeps this
+		// feature (raises account activity by keeping chats alive) on without any AI
+		// cost/risk.
 		chatDataResponse, err := r.GetChatData(chatToReply.ChatId, chatToReply.ApplicantId)
 		if err != nil {
 			logger.Warn("Can't load messages from chat #%d: %v", chatToReply.ChatId, err)
@@ -345,7 +346,7 @@ func (r *HHAIResponder) AutoRespondChats() error {
 
 		reply := r.randomQuestion()
 		if reply == "" {
-			logger.Warn("No filler messages available in questions.txt, skipping chat #%d", chatToReply.ChatId)
+			logger.Warn("No filler messages available in content/chat_filler_messages.txt, skipping chat #%d", chatToReply.ChatId)
 			continue
 		}
 

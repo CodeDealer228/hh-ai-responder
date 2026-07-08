@@ -18,10 +18,10 @@ const (
 	chatCompletionsPath = "/v1/chat/completions"
 	defaultGithubURL    = "https://github.com/s3rgeym"
 
-	generateLetterPromptPath  = "prompts/generate_letter.txt"
-	testCommonRulesPromptPath = "prompts/test_common_rules.txt"
-	testChoiceTaskPromptPath  = "prompts/test_choice_task.txt"
-	testOpenTaskPromptPath    = "prompts/test_open_task.txt"
+	generateLetterPromptPath  = "content/ai_cover_letter_generation_prompt.txt"
+	testCommonRulesPromptPath = "content/hh_test_common_rules_prompt.txt"
+	testChoiceTaskPromptPath  = "content/hh_test_choice_question_prompt.txt"
+	testOpenTaskPromptPath    = "content/hh_test_open_question_prompt.txt"
 )
 
 // letterArtifactRegexp catches leaked reasoning/planning text from "thinking" models
