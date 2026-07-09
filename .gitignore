@@ -1,5 +1,7 @@
 /.env
 /cookies.txt
+/content
+/CLAUDE.md
 /search.html
 /resumes.html
 /hh-ai-responder
