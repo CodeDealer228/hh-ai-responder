@@ -21,6 +21,11 @@ const (
 	defaultOllamaModel       = "llama3:8b"
 	defaultOpenRouterBaseURL = "https://openrouter.ai/api"
 	defaultOpenRouterModel   = "openrouter/free"
+	// Polza.ai docs (quickstart) give the full endpoint as
+	// https://polza.ai/api/v1/chat/completions — chatCompletionsPath (ai.go) already
+	// appends "/v1/chat/completions", so the base URL here stops at "/api".
+	defaultPolzaBaseURL = "https://polza.ai/api"
+	defaultPolzaModel   = "deepseek/deepseek-v4-flash"
 )
 
 type Config struct {
@@ -30,8 +35,9 @@ type Config struct {
 	Resume       string
 	MaxResponses int
 
-	// AIProvider selects which of the two backends below is actually used: "ollama"
-	// (default, matches the project's original local-first behavior) or "openrouter".
+	// AIProvider selects which of the three backends below is actually used: "ollama"
+	// (default, matches the project's original local-first behavior), "openrouter" or
+	// "polza".
 	AIProvider        string
 	OllamaBaseURL     string
 	OllamaModel       string
@@ -39,6 +45,9 @@ type Config struct {
 	OpenRouterBaseURL string
 	OpenRouterModel   string
 	OpenRouterAPIKey  string
+	PolzaBaseURL      string
+	PolzaModel        string
+	PolzaAPIKey       string
 
 	AITimeout               time.Duration
 	AIAttempts              int
@@ -51,6 +60,11 @@ type Config struct {
 	ForceLetter             bool
 	ExtraChatReplyPrompt    string
 	DebugSolveTests         bool
+	DebugScrapeVacancies    bool
+	DebugScrapeLimit        int
+	DebugScrapeOutput       string
+	DebugEvalQA             bool
+	DebugEvalQAInput        string
 }
 
 // ActiveAI resolves which base URL/model/API key to use based on AIProvider.
@@ -59,6 +73,8 @@ func (cfg Config) ActiveAI() (baseURL, model, apiKey string) {
 	switch strings.ToLower(strings.TrimSpace(cfg.AIProvider)) {
 	case "openrouter":
 		return cfg.OpenRouterBaseURL, cfg.OpenRouterModel, cfg.OpenRouterAPIKey
+	case "polza":
+		return cfg.PolzaBaseURL, cfg.PolzaModel, cfg.PolzaAPIKey
 	default:
 		return cfg.OllamaBaseURL, cfg.OllamaModel, cfg.OllamaAPIKey
 	}
@@ -83,18 +99,26 @@ func parseConfig() (Config, error) {
 	flag.DurationVar(&cfg.AITimeout, "ai-timeout", defaultAITimeout, "Таймаут AI-запросов")
 	flag.DurationVar(&cfg.RequestInterval, "request-interval", defaultRequestInterval, "Минимальный интервал между запросами к hh.ru")
 	flag.IntVar(&cfg.AIAttempts, "ai-attempts", defaultAIAttempts, "Количество попыток отправить запрос к ИИ")
-	flag.StringVar(&cfg.AIProvider, "ai-provider", "ollama", "Провайдер ИИ: ollama или openrouter")
+	flag.StringVar(&cfg.AIProvider, "ai-provider", "ollama", "Провайдер ИИ: ollama, openrouter или polza")
 	flag.StringVar(&cfg.OllamaBaseURL, "ollama-base-url", defaultOllamaBaseURL, "Базовый URL локальной Ollama")
 	flag.StringVar(&cfg.OllamaModel, "ollama-model", defaultOllamaModel, "Модель Ollama")
 	flag.StringVar(&cfg.OllamaAPIKey, "ollama-api-key", "", "API-ключ Ollama (обычно не требуется)")
 	flag.StringVar(&cfg.OpenRouterBaseURL, "openrouter-base-url", defaultOpenRouterBaseURL, "Базовый URL OpenRouter")
 	flag.StringVar(&cfg.OpenRouterModel, "openrouter-model", defaultOpenRouterModel, "Модель OpenRouter (например, openrouter/free)")
 	flag.StringVar(&cfg.OpenRouterAPIKey, "openrouter-api-key", "", "API-ключ OpenRouter")
+	flag.StringVar(&cfg.PolzaBaseURL, "polza-base-url", defaultPolzaBaseURL, "Базовый URL Polza.ai")
+	flag.StringVar(&cfg.PolzaModel, "polza-model", defaultPolzaModel, "Модель Polza.ai (формат provider/model, например deepseek/deepseek-v4-flash)")
+	flag.StringVar(&cfg.PolzaAPIKey, "polza-api-key", "", "API-ключ Polza.ai")
 	flag.StringVar(&cfg.Contacts, "contacts", "", "Контакты для передачи работодателю")
 	flag.StringVar(&cfg.ExtraTestSolutionPrompt, "solution-prompt", "", "Дополнительный промпт для решения тестов при отклике")
 	flag.StringVar(&cfg.ExtraChatReplyPrompt, "chat-reply-prompt", "", "Дополнительный промпт для сообщений в чатах с работодателями")
 	flag.StringVar(&cfg.ExtraLetterPrompt, "letter-prompt", "", "Дополнительный промпт для сопроводительного письма")
 	flag.BoolVar(&cfg.DebugSolveTests, "debug-solve-tests", false, "Прогнать SolveTests на синтетическом наборе задач и выйти, не трогая hh.ru")
+	flag.BoolVar(&cfg.DebugScrapeVacancies, "debug-scrape-vacancies", false, "Собрать описания вакансий по поисковому запросу (-u) в JSON-файл и выйти, не откликаясь")
+	flag.IntVar(&cfg.DebugScrapeLimit, "debug-scrape-limit", 80, "Максимум вакансий для сбора в режиме -debug-scrape-vacancies")
+	flag.StringVar(&cfg.DebugScrapeOutput, "debug-scrape-output", "vacancies.json", "Файл для сохранения собранных вакансий в режиме -debug-scrape-vacancies")
+	flag.BoolVar(&cfg.DebugEvalQA, "debug-eval-qa", false, "Прогнать вопросы из JSON-файла (-debug-eval-qa-input) через промпт открытых вопросов дважды (с reasoning и без), сохранить ответы, не трогая hh.ru")
+	flag.StringVar(&cfg.DebugEvalQAInput, "debug-eval-qa-input", "tests_qa.json", "Входной JSON-файл для режима -debug-eval-qa")
 	flag.Parse()
 
 	_ = loadDotEnv(".env")
@@ -130,6 +154,15 @@ func parseConfig() (Config, error) {
 	}
 	if !flags["openrouter-api-key"] {
 		cfg.OpenRouterAPIKey = getEnv("HH_OPENROUTER_API_KEY", cfg.OpenRouterAPIKey)
+	}
+	if !flags["polza-base-url"] {
+		cfg.PolzaBaseURL = getEnv("HH_POLZA_BASE_URL", cfg.PolzaBaseURL)
+	}
+	if !flags["polza-model"] {
+		cfg.PolzaModel = getEnv("HH_POLZA_MODEL", cfg.PolzaModel)
+	}
+	if !flags["polza-api-key"] {
+		cfg.PolzaAPIKey = getEnv("HH_POLZA_API_KEY", cfg.PolzaAPIKey)
 	}
 	if !flags["letter-prompt"] {
 		cfg.ExtraLetterPrompt = getEnv("HH_LETTER_PROMPT", cfg.ExtraLetterPrompt)

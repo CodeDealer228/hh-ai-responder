@@ -65,20 +65,24 @@ cp example.env .env
 | Переменная               | Флаг                  | Назначение                                                             |
 | ------------------------ | --------------------- | ---------------------------------------------------------------------- |
 | `HH_SEARCH_URL`          | `-u`                  | URL для поиска вакансий.                                               |
-| `HH_AI_PROVIDER`         | `-ai-provider`        | Провайдер ИИ: `ollama` (по умолчанию) или `openrouter`.                |
+| `HH_AI_PROVIDER`         | `-ai-provider`        | Провайдер ИИ: `ollama` (по умолчанию), `openrouter` или `polza`.       |
 | `HH_OLLAMA_BASE_URL`     | `-ollama-base-url`    | Базовый URL локальной Ollama.                                         |
 | `HH_OLLAMA_MODEL`        | `-ollama-model`       | Модель Ollama.                                                        |
 | `HH_OLLAMA_API_KEY`      | `-ollama-api-key`     | API key для Ollama (обычно не требуется).                             |
 | `HH_OPENROUTER_BASE_URL` | `-openrouter-base-url`| Базовый URL OpenRouter.                                               |
 | `HH_OPENROUTER_MODEL`    | `-openrouter-model`   | Модель OpenRouter (например, `openrouter/free`).                      |
 | `HH_OPENROUTER_API_KEY`  | `-openrouter-api-key` | API key для OpenRouter.                                               |
+| `HH_POLZA_BASE_URL`      | `-polza-base-url`     | Базовый URL Polza.ai.                                                 |
+| `HH_POLZA_MODEL`         | `-polza-model`        | Модель Polza.ai в формате `provider/model` (например, `deepseek/deepseek-v4-flash`). |
+| `HH_POLZA_API_KEY`       | `-polza-api-key`      | API key для Polza.ai.                                                 |
 | `HH_LETTER_PROMPT`       | `-letter-prompt`      | Дополнительные инструкции для сопроводительного письма.                |
 | `HH_SOLUTION_PROMPT`     | `-solution-prompt`    | Дополнительные инструкции для решения тестов.                          |
 | `HH_CHAT_REPLY_PROMPT`   | `-chat-reply-prompt`  | Дополнительные инструкции для ответов в чатах с работодателями.        |
 | `HH_CONTACTS`            | `-contacts`           | Контакты (телефон, email и т.д.), которые будут добавлены в сообщение. |
 
-Только одна из пар (Ollama/OpenRouter) активна за раз — выбирается через `HH_AI_PROVIDER`,
-настройки второго провайдера при этом просто игнорируются, их можно оставить в `.env` про запас.
+Только один из трёх наборов (Ollama/OpenRouter/Polza.ai) активен за раз — выбирается через
+`HH_AI_PROVIDER`, настройки остальных при этом просто игнорируются, их можно оставить в
+`.env` про запас.
 
 Например, для OpenRouter нужно указать:
 
@@ -89,6 +93,18 @@ HH_AI_PROVIDER=openrouter
 HH_OPENROUTER_BASE_URL="https://openrouter.ai/api"
 HH_OPENROUTER_MODEL="openrouter/free"
 HH_OPENROUTER_API_KEY="ваш_api_ключ_от_openrouter"
+```
+
+Для [Polza.ai](https://polza.ai/docs) (агрегатор моделей с OpenAI-совместимым API,
+модели указываются в формате `provider/model`):
+
+`.env`
+
+```env
+HH_AI_PROVIDER=polza
+HH_POLZA_BASE_URL="https://polza.ai/api"
+HH_POLZA_MODEL="deepseek/deepseek-v4-flash"
+HH_POLZA_API_KEY="ваш_api_ключ_от_polza.ai"
 ```
 
 ## Docker

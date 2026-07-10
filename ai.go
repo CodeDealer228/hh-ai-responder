@@ -75,7 +75,15 @@ func NewAIClient(ctx context.Context, baseURL, model, apiKey string, timeout tim
 	}
 }
 
+// Chat calls the AI with reasoning explicitly disabled — the production default for
+// every call site (letters, tests, chat filler used to). See chat() for why.
 func (c *AIClient) Chat(systemPrompt, userPrompt string, maxTokens int, temperature float64) (string, error) {
+	return c.chat(systemPrompt, userPrompt, maxTokens, temperature, "none")
+}
+
+// chat is the shared implementation; reasoningEffort is exposed separately (rather than
+// always "none") so eval tooling can compare reasoning vs non-reasoning behavior.
+func (c *AIClient) chat(systemPrompt, userPrompt string, maxTokens int, temperature float64, reasoningEffort string) (string, error) {
 	payload := ChatCompletionRequest{
 		Model:       c.model,
 		Messages:    []AIMessage{{Role: "system", Content: systemPrompt}, {Role: "user", Content: userPrompt}},
@@ -85,7 +93,7 @@ func (c *AIClient) Chat(systemPrompt, userPrompt string, maxTokens int, temperat
 		// Ollama's OpenAI-compat layer defaults reasoning-capable models to thinking=true
 		// when this is unset, which burns the token budget on hidden reasoning and can
 		// leave Content empty. Providers that don't support this field ignore it.
-		ReasoningEffort: "none",
+		ReasoningEffort: reasoningEffort,
 	}
 
 	body, err := json.Marshal(payload)
