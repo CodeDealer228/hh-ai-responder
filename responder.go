@@ -99,8 +99,8 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 		Timeout: 30 * time.Second,
 	}
 
-	aiBaseURL, aiModel, aiAPIKey := cfg.ActiveAI()
-	logger.Debug("AI provider: %s (base_url=%s, model=%s)", cfg.AIProvider, aiBaseURL, aiModel)
+	aiProvider, aiBaseURL, aiModel, aiAPIKey, aiReasoningEffort := cfg.ActiveAI()
+	logger.Debug("AI provider: %s (base_url=%s, model=%s, reasoning_effort=%s)", aiProvider, aiBaseURL, aiModel, aiReasoningEffort)
 
 	responder := &HHAIResponder{
 		ctx:                     ctx,
@@ -110,7 +110,7 @@ func NewHHAIResponder(ctx context.Context, cfg Config) (*HHAIResponder, error) {
 		client:                  client,
 		jar:                     jar,
 		resumeHash:              cfg.Resume,
-		ai:                      NewAIClient(ctx, aiBaseURL, aiModel, aiAPIKey, cfg.AITimeout, cfg.AIAttempts),
+		ai:                      NewAIClient(ctx, aiProvider, aiBaseURL, aiModel, aiAPIKey, cfg.AITimeout, cfg.AIAttempts, aiReasoningEffort),
 		extraLetterPrompt:       cfg.ExtraLetterPrompt,
 		extraTestSolutionPrompt: cfg.ExtraTestSolutionPrompt,
 		contacts:                cfg.Contacts,

@@ -1,5 +1,6 @@
 /.env
 /cookies.txt
+/cookies_*.txt
 /content
 /CLAUDE.md
 /search.html

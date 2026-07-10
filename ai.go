@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ const (
 	aiRetryDelay        = 3 * time.Second
 	chatCompletionsPath = "/v1/chat/completions"
 	defaultGithubURL    = "https://github.com/s3rgeym"
+	qaLogPath           = "qa_log.json"
 
 	generateLetterPromptPath  = "content/ai_cover_letter_generation_prompt.txt"
 	testCommonRulesPromptPath = "content/hh_test_common_rules_prompt.txt"
@@ -29,12 +31,52 @@ const (
 var letterArtifactRegexp = regexp.MustCompile(`(?i)\bwe need to\b|\blet'?s craft\b|\bsentence \d+\s*:|\blet me\b|\bi need to\b`)
 
 type AIClient struct {
-	ctx      context.Context
-	baseURL  string
-	model    string
-	apiKey   string
-	attempts int
-	client   *http.Client
+	ctx             context.Context
+	provider        string
+	baseURL         string
+	model           string
+	apiKey          string
+	attempts        int
+	reasoningEffort string
+	client          *http.Client
+}
+
+// QALogEntry is one entry in qaLogPath — every question the AI was actually asked to
+// solve for an hh.ru test, and whatever it answered, for later inspection/comparison
+// across providers/models/reasoning settings.
+type QALogEntry struct {
+	Provider        string `json:"provider"`
+	Model           string `json:"model"`
+	ReasoningEffort string `json:"reasoning_effort"`
+	Question        string `json:"question"`
+	Answer          string `json:"answer"`
+}
+
+// logQA appends one pretty-printed (one field per line) QALogEntry to qaLogPath. Best
+// effort: a logging failure must never break the actual apply flow.
+func (c *AIClient) logQA(question, answer string) {
+	data, err := json.MarshalIndent(QALogEntry{
+		Provider:        c.provider,
+		Model:           c.model,
+		ReasoningEffort: c.reasoningEffort,
+		Question:        question,
+		Answer:          answer,
+	}, "", "  ")
+	if err != nil {
+		logger.Warn("Failed to marshal QA log entry: %v", err)
+		return
+	}
+
+	f, err := os.OpenFile(qaLogPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		logger.Warn("Failed to open %s: %v", qaLogPath, err)
+		return
+	}
+	defer f.Close()
+
+	if _, err := f.Write(append(data, '\n')); err != nil {
+		logger.Warn("Failed to write QA log entry to %s: %v", qaLogPath, err)
+	}
 }
 
 type AIMessage struct {
@@ -59,26 +101,27 @@ type ChatCompletionChoice struct {
 	Message AIMessage `json:"message"`
 }
 
-func NewAIClient(ctx context.Context, baseURL, model, apiKey string, timeout time.Duration, attempts int) *AIClient {
+func NewAIClient(ctx context.Context, provider, baseURL, model, apiKey string, timeout time.Duration, attempts int, reasoningEffort string) *AIClient {
 	if !strings.Contains(baseURL, "://") {
 		baseURL = "http://" + baseURL
 	}
 	return &AIClient{
-		ctx:      ctx,
-		baseURL:  strings.TrimRight(baseURL, "/"),
-		model:    model,
-		apiKey:   apiKey,
-		attempts: attempts,
+		ctx:             ctx,
+		provider:        provider,
+		baseURL:         strings.TrimRight(baseURL, "/"),
+		model:           model,
+		apiKey:          apiKey,
+		attempts:        attempts,
+		reasoningEffort: reasoningEffort,
 		client: &http.Client{
 			Timeout: timeout,
 		},
 	}
 }
 
-// Chat calls the AI with reasoning explicitly disabled — the production default for
-// every call site (letters, tests, chat filler used to). See chat() for why.
+// Chat calls the AI with the client's configured reasoning effort (see chat()).
 func (c *AIClient) Chat(systemPrompt, userPrompt string, maxTokens int, temperature float64) (string, error) {
-	return c.chat(systemPrompt, userPrompt, maxTokens, temperature, "none")
+	return c.chat(systemPrompt, userPrompt, maxTokens, temperature, c.reasoningEffort)
 }
 
 // chat is the shared implementation; reasoningEffort is exposed separately (rather than
@@ -272,6 +315,7 @@ func (c *AIClient) solveChoiceTask(task Task, contacts, extraPrompt string) (Sol
 	if err != nil {
 		return SolutionFields{}, err
 	}
+	c.logQA(task.Description, response)
 
 	var parsed struct {
 		SolutionID *int `json:"solution_id"`
@@ -294,6 +338,7 @@ func (c *AIClient) solveOpenTask(task Task, contacts, extraPrompt string) (Solut
 	if err != nil {
 		return SolutionFields{}, err
 	}
+	c.logQA(task.Description, response)
 
 	return SolutionFields{TextSolution: strings.TrimSpace(response)}, nil
 }

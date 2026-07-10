@@ -29,8 +29,8 @@ func main() {
 	}
 
 	if cfg.DebugEvalQA {
-		aiBaseURL, aiModel, aiAPIKey := cfg.ActiveAI()
-		ai := NewAIClient(ctx, aiBaseURL, aiModel, aiAPIKey, cfg.AITimeout, cfg.AIAttempts)
+		aiProvider, aiBaseURL, aiModel, aiAPIKey, aiReasoningEffort := cfg.ActiveAI()
+		ai := NewAIClient(ctx, aiProvider, aiBaseURL, aiModel, aiAPIKey, cfg.AITimeout, cfg.AIAttempts, aiReasoningEffort)
 		if err := runDebugEvalQA(ai, cfg); err != nil {
 			logger.Error("%v", err)
 			os.Exit(1)
@@ -66,8 +66,8 @@ func main() {
 // test questions, talking only to the configured AI backend — no hh.ru requests at all.
 // Temporary manual-testing aid for the local-LLM migration; not wired into normal runs.
 func runDebugSolveTests(ctx context.Context, cfg Config) {
-	aiBaseURL, aiModel, aiAPIKey := cfg.ActiveAI()
-	ai := NewAIClient(ctx, aiBaseURL, aiModel, aiAPIKey, cfg.AITimeout, cfg.AIAttempts)
+	aiProvider, aiBaseURL, aiModel, aiAPIKey, aiReasoningEffort := cfg.ActiveAI()
+	ai := NewAIClient(ctx, aiProvider, aiBaseURL, aiModel, aiAPIKey, cfg.AITimeout, cfg.AIAttempts, aiReasoningEffort)
 
 	tasks := []Task{
 		{ID: 1, Description: "Какой у вас опыт работы с большими языковыми моделями (LLM)?", Open: "true", CandidateSolutions: []Solution{}},

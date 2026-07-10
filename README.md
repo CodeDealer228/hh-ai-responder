@@ -65,6 +65,7 @@ cp example.env .env
 | Переменная               | Флаг                  | Назначение                                                             |
 | ------------------------ | --------------------- | ---------------------------------------------------------------------- |
 | `HH_SEARCH_URL`          | `-u`                  | URL для поиска вакансий.                                               |
+| `HH_COOKIE_FILENAME`     | `-c` (полный путь)    | Имя файла cookies в рабочем каталоге; пусто = `cookies.txt`. Удобно для переключения между аккаунтами. |
 | `HH_AI_PROVIDER`         | `-ai-provider`        | Провайдер ИИ: `ollama` (по умолчанию), `openrouter` или `polza`.       |
 | `HH_OLLAMA_BASE_URL`     | `-ollama-base-url`    | Базовый URL локальной Ollama.                                         |
 | `HH_OLLAMA_MODEL`        | `-ollama-model`       | Модель Ollama.                                                        |
@@ -75,6 +76,7 @@ cp example.env .env
 | `HH_POLZA_BASE_URL`      | `-polza-base-url`     | Базовый URL Polza.ai.                                                 |
 | `HH_POLZA_MODEL`         | `-polza-model`        | Модель Polza.ai в формате `provider/model` (например, `deepseek/deepseek-v4-flash`). |
 | `HH_POLZA_API_KEY`       | `-polza-api-key`      | API key для Polza.ai.                                                 |
+| `HH_POLZA_REASONING_EFFORT` | `-polza-reasoning-effort` | `reasoning_effort` для Polza.ai (`minimal`/`low`/`medium`/`high`); пусто = `none`. |
 | `HH_LETTER_PROMPT`       | `-letter-prompt`      | Дополнительные инструкции для сопроводительного письма.                |
 | `HH_SOLUTION_PROMPT`     | `-solution-prompt`    | Дополнительные инструкции для решения тестов.                          |
 | `HH_CHAT_REPLY_PROMPT`   | `-chat-reply-prompt`  | Дополнительные инструкции для ответов в чатах с работодателями.        |

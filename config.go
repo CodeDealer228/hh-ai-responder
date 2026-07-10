@@ -45,9 +45,10 @@ type Config struct {
 	OpenRouterBaseURL string
 	OpenRouterModel   string
 	OpenRouterAPIKey  string
-	PolzaBaseURL      string
-	PolzaModel        string
-	PolzaAPIKey       string
+	PolzaBaseURL         string
+	PolzaModel           string
+	PolzaAPIKey          string
+	PolzaReasoningEffort string
 
 	AITimeout               time.Duration
 	AIAttempts              int
@@ -67,16 +68,23 @@ type Config struct {
 	DebugEvalQAInput        string
 }
 
-// ActiveAI resolves which base URL/model/API key to use based on AIProvider.
-// Unknown or empty AIProvider falls back to Ollama, matching the pre-routing default.
-func (cfg Config) ActiveAI() (baseURL, model, apiKey string) {
+// ActiveAI resolves which provider name/base URL/model/API key/reasoning effort to use
+// based on AIProvider. Unknown or empty AIProvider falls back to Ollama, matching the
+// pre-routing default. Ollama and OpenRouter always get reasoning explicitly disabled
+// ("none" — see AIClient.chat for why); Polza's reasoning effort is configurable since
+// its models don't share Ollama's "defaults to thinking" problem.
+func (cfg Config) ActiveAI() (provider, baseURL, model, apiKey, reasoningEffort string) {
 	switch strings.ToLower(strings.TrimSpace(cfg.AIProvider)) {
 	case "openrouter":
-		return cfg.OpenRouterBaseURL, cfg.OpenRouterModel, cfg.OpenRouterAPIKey
+		return "openrouter", cfg.OpenRouterBaseURL, cfg.OpenRouterModel, cfg.OpenRouterAPIKey, "none"
 	case "polza":
-		return cfg.PolzaBaseURL, cfg.PolzaModel, cfg.PolzaAPIKey
+		effort := cfg.PolzaReasoningEffort
+		if effort == "" {
+			effort = "none"
+		}
+		return "polza", cfg.PolzaBaseURL, cfg.PolzaModel, cfg.PolzaAPIKey, effort
 	default:
-		return cfg.OllamaBaseURL, cfg.OllamaModel, cfg.OllamaAPIKey
+		return "ollama", cfg.OllamaBaseURL, cfg.OllamaModel, cfg.OllamaAPIKey, "none"
 	}
 }
 
@@ -109,6 +117,7 @@ func parseConfig() (Config, error) {
 	flag.StringVar(&cfg.PolzaBaseURL, "polza-base-url", defaultPolzaBaseURL, "Базовый URL Polza.ai")
 	flag.StringVar(&cfg.PolzaModel, "polza-model", defaultPolzaModel, "Модель Polza.ai (формат provider/model, например deepseek/deepseek-v4-flash)")
 	flag.StringVar(&cfg.PolzaAPIKey, "polza-api-key", "", "API-ключ Polza.ai")
+	flag.StringVar(&cfg.PolzaReasoningEffort, "polza-reasoning-effort", "", "reasoning_effort для Polza.ai (например, minimal/low/medium/high); пусто = none")
 	flag.StringVar(&cfg.Contacts, "contacts", "", "Контакты для передачи работодателю")
 	flag.StringVar(&cfg.ExtraTestSolutionPrompt, "solution-prompt", "", "Дополнительный промпт для решения тестов при отклике")
 	flag.StringVar(&cfg.ExtraChatReplyPrompt, "chat-reply-prompt", "", "Дополнительный промпт для сообщений в чатах с работодателями")
@@ -163,6 +172,16 @@ func parseConfig() (Config, error) {
 	}
 	if !flags["polza-api-key"] {
 		cfg.PolzaAPIKey = getEnv("HH_POLZA_API_KEY", cfg.PolzaAPIKey)
+	}
+	if !flags["polza-reasoning-effort"] {
+		cfg.PolzaReasoningEffort = getEnv("HH_POLZA_REASONING_EFFORT", cfg.PolzaReasoningEffort)
+	}
+	// HH_COOKIE_FILENAME overrides just the filename (resolved against the working
+	// directory), so switching accounts doesn't require passing the full -c path.
+	if !flags["c"] {
+		if filename := getEnv("HH_COOKIE_FILENAME", ""); filename != "" {
+			cfg.CookiesPath = filepath.Join(wd, filename)
+		}
 	}
 	if !flags["letter-prompt"] {
 		cfg.ExtraLetterPrompt = getEnv("HH_LETTER_PROMPT", cfg.ExtraLetterPrompt)
